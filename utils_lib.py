@@ -94,9 +94,9 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str):
             return cpp_type
         nested = cpp_type
         for _ in range(depth - 1):
-            nested = f"std::vector<{nested}>"
+            nested = f"vector<{nested}>"
         return nested
-
+    
     def make_vector(cpp_type: str, depth: int):
         type_str = vector_type_string(cpp_type, depth)
         return ROOT.std.vector(type_str)()
@@ -340,6 +340,7 @@ def fromDatafile_fill(
             timestamp = name_lc[:13] if len(name_lc) >= 13 else ""
 
             voltage_v = 0
+            voltage_Str = ""
             wavelength_nm = 0
             reps = 1
             scan_type = ""
@@ -347,6 +348,7 @@ def fromDatafile_fill(
             for t in tokens:
                 if t.endswith("v") and t[:-1].isdigit():
                     voltage_v = int(t[:-1])
+                    voltage_Str = t[:-1]
 
                 if t.endswith("nm") and t[:-2].isdigit():
                     wavelength_nm = int(t[:-2])
@@ -396,6 +398,7 @@ def fromDatafile_fill(
                 "name",
                 "timestamp",
                 "voltage_v",
+                "voltage_Str",
                 "wavelength_nm",
                 "reps",
                 "scan_type",
@@ -414,6 +417,7 @@ def fromDatafile_fill(
                 name_lc,
                 timestamp,
                 voltage_v,
+                voltage_Str,
                 wavelength_nm,
                 reps,
                 scan_type,
