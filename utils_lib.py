@@ -1,9 +1,9 @@
-def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "analysis"):
+def wu_rootfile(root_path: str, names: list, params: list, tree_name: str):
     """
-    Crea o actualiza un ROOT file con un TTree 'analysis' de UNA entrada.
+    Crea o actualiza un ROOT file con un TTree indicado por `tree_name` y UNA entrada.
 
     - names: lista de nombres de ramas
-    - params: lista de valores (escalares o vectores 1D)
+    - params: lista de valores (escalares o vectores)
     - Tipos se deducen desde params
 
     Caso especial (Variante B segura):
@@ -15,6 +15,8 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
       Vectores 1D: np.ndarray, list, tuple
         - numéricos: float32/float64/int32/int64/bool
         - strings: list[str] o np.ndarray dtype string/object
+      Vectores N-D numéricos: np.ndarray o listas anidadas (N>=2)
+        - se guardan como std::vector de std::vector (recursivo)
     """
     import ROOT
     import numpy as np
@@ -30,7 +32,13 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
     def to_numpy_1d(x):
         a = np.asarray(x)
         if a.ndim != 1:
-            raise ValueError("Solo se soportan vectores 1D")
+            raise ValueError("Solo se soportan vectores 1D en esta ruta")
+        return a
+
+    def to_numpy_nd(x):
+        a = np.asarray(x)
+        if a.ndim < 1:
+            raise ValueError("Solo se soportan arreglos 1D o superiores")
         return a
 
     def is_string_scalar(x):
@@ -42,6 +50,16 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
         if isinstance(x, (list, tuple)) and len(x) > 0 and all(isinstance(v, str) for v in x):
             return True
         return False
+
+    def infer_list_depth(x):
+        depth = 0
+        cur = x
+        while isinstance(cur, (list, tuple)) and len(cur) > 0:
+            if all(isinstance(v, str) for v in cur):
+                break
+            depth += 1
+            cur = cur[0]
+        return depth
 
     def make_scalar_buffer(pytype):
         # ROOT leaf types: I=int32, L=int64, F=float32, D=float64, O=bool
@@ -57,25 +75,53 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
             return array("d", [0.0]), "D"
         raise TypeError(f"Tipo escalar no soportado: {pytype}")
 
-    def make_vector_numeric(dtype):
+    def cpp_numeric_type(dtype):
         dt = np.dtype(dtype)
         if dt == np.dtype("float64"):
-            return ROOT.std.vector("double")()
+            return "double"
         if dt == np.dtype("float32"):
-            return ROOT.std.vector("float")()
+            return "float"
         if dt == np.dtype("int64"):
-            return ROOT.std.vector("long long")()
+            return "long long"
         if dt == np.dtype("int32"):
-            return ROOT.std.vector("int")()
+            return "int"
         if dt == np.dtype("bool"):
-            return ROOT.std.vector("bool")()
-        # fallback
-        return ROOT.std.vector("double")()
+            return "bool"
+        return "double"
+
+    def vector_type_string(cpp_type: str, depth: int) -> str:
+        if depth == 1:
+            return cpp_type
+        nested = cpp_type
+        for _ in range(depth - 1):
+            nested = f"std::vector<{nested}>"
+        return nested
+
+    def make_vector(cpp_type: str, depth: int):
+        type_str = vector_type_string(cpp_type, depth)
+        return ROOT.std.vector(type_str)()
 
     def fill_vector_numeric(vec, arr):
         vec.clear()
         for v in arr:
             vec.push_back(v.item() if hasattr(v, "item") else v)
+
+    def fill_nested_vector(vec, arr, cpp_type: str, depth: int):
+        vec.clear()
+        if depth == 1:
+            fill_vector_numeric(vec, arr)
+            return
+        inner_cls = ROOT.std.vector(vector_type_string(cpp_type, depth - 1))
+        for sub in arr:
+            inner_vec = inner_cls()
+            fill_nested_vector(inner_vec, sub, cpp_type, depth - 1)
+            vec.push_back(inner_vec)
+
+    def vector_to_list(obj):
+        cls = obj.__class__.__name__ if hasattr(obj, "__class__") else ""
+        if "vector" in cls:
+            return [vector_to_list(v) for v in obj]
+        return obj
 
     def read_old_entry(tree):
         """Lee la entrada 0 del tree viejo y devuelve dict name->value."""
@@ -88,7 +134,7 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
             val = getattr(tree, name)
             cls = val.__class__.__name__ if hasattr(val, "__class__") else ""
             if "vector" in cls:
-                out[name] = list(val)
+                out[name] = vector_to_list(val)
             elif "string" in cls:
                 out[name] = str(val)
             else:
@@ -100,6 +146,9 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
     # ---------------------------
     if len(names) != len(params):
         raise ValueError("names y params deben tener la misma longitud")
+
+    if not tree_name:
+        raise ValueError("tree_name es obligatorio")
 
     mode = "UPDATE" if os.path.exists(root_path) else "RECREATE"
     f = ROOT.TFile.Open(root_path, mode)
@@ -157,24 +206,35 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
             s = ROOT.std.string(str(p))
             new_tree.Branch(n, s)
             buffers[n] = s
-            kinds[n] = "scalar_string"
+            kinds[n] = ("scalar_string", None)
             continue
 
-        # vector de strings
+        # vector de strings (solo 1D)
         if is_vector_like(p) and is_string_vector(p):
+            arr = np.asarray(p)
+            if arr.ndim != 1:
+                raise ValueError("Solo se soportan vectores 1D de strings")
             v = ROOT.std.vector("string")()
             new_tree.Branch(n, v)
             buffers[n] = v
-            kinds[n] = "vector_string"
+            kinds[n] = ("vector_string", None)
             continue
 
-        # vector numérico
+        # vector numérico (1D o ND)
         if is_vector_like(p):
-            arr = to_numpy_1d(p)
-            v = make_vector_numeric(arr.dtype)
+            arr = to_numpy_nd(p)
+            cpp_type = cpp_numeric_type(arr.dtype)
+            if arr.ndim == 1:
+                v = make_vector(cpp_type, 1)
+                new_tree.Branch(n, v)
+                buffers[n] = v
+                kinds[n] = ("vector_numeric", arr.dtype)
+                continue
+
+            v = make_vector(cpp_type, arr.ndim)
             new_tree.Branch(n, v)
             buffers[n] = v
-            kinds[n] = "vector_numeric"
+            kinds[n] = ("vector_numeric_nd", (arr.dtype, arr.ndim))
             continue
 
         # escalar numérico/bool
@@ -183,16 +243,16 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
         buf, leaf = make_scalar_buffer(type(p))
         new_tree.Branch(n, buf, f"{n}/{leaf}")
         buffers[n] = buf
-        kinds[n] = "scalar"
+        kinds[n] = ("scalar", None)
 
     # ---------------------------
     # fill entry
     # ---------------------------
     for n, p in values.items():
-        k = kinds[n]
-        if k == "scalar_string":
+        kind, meta = kinds[n]
+        if kind == "scalar_string":
             buffers[n].assign(str(p))
-        elif k == "vector_string":
+        elif kind == "vector_string":
             buffers[n].clear()
             if isinstance(p, np.ndarray):
                 iterable = [str(x) for x in p.tolist()]
@@ -200,8 +260,12 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
                 iterable = [str(x) for x in p]
             for s in iterable:
                 buffers[n].push_back(s)
-        elif k == "vector_numeric":
+        elif kind == "vector_numeric":
             fill_vector_numeric(buffers[n], to_numpy_1d(p))
+        elif kind == "vector_numeric_nd":
+            dtype, depth = meta
+            arr = np.asarray(p, dtype=dtype)
+            fill_nested_vector(buffers[n], arr, cpp_numeric_type(arr.dtype), depth)
         else:
             if isinstance(p, np.generic):
                 p = p.item()
@@ -216,17 +280,20 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str = "ana
     return root_path
 
 
-def wu_rootfileList(root_path: str, Gnames: list, Gparams: list, tree_name: str = "analysis"):
+def wu_rootfileList(root_path: list, Gnames: list, Gparams: list, tree_name: str):
     for _path in root_path:
         wu_rootfile(_path, Gnames, Gparams, tree_name)
 
+
 from pathlib import Path
 import numpy as np
+
 
 def fromDatafile_fill(
     file_names,
     root_dir,
     raw_dir,
+    tree_name: str,
     do_flipZ=True,
     do_invertSignal=False,
 ):
@@ -234,7 +301,7 @@ def fromDatafile_fill(
     Unifica:
       - fill_datafile_meta_from_name: parsea metadatos desde el nombre
       - generate_data: lee datafile y genera z, x, y, LP, WFsRaw
-    y lo guarda TODO en el ROOT file (TTree 'analysis') vía wu_rootfile().
+    y lo guarda TODO en el ROOT file (TTree indicado por tree_name) vía wu_rootfile().
 
     Parameters
     ----------
@@ -245,6 +312,8 @@ def fromDatafile_fill(
         Directorio donde están/irán los .root
     raw_dir : str | Path
         Directorio donde están los datafiles (sin extensión)
+    tree_name : str
+        Nombre del TTree donde se guarda la información
     do_flipZ : bool
         Si True: z = data[:,0] * -1000 ; si False: z = data[:,0] * 1000
     do_invertSignal : bool
@@ -290,7 +359,7 @@ def fromDatafile_fill(
 
             # --- paths ---
             root_path = root_dir / f"{file_name}.root"
-            raw_path  = raw_dir  / file_name  # sin extensión
+            raw_path = raw_dir / file_name  # sin extensión
 
             # --- leer datafile (saltando 4 separadores de guiones) ---
             dash_count = 0
@@ -356,17 +425,11 @@ def fromDatafile_fill(
                 x.astype(np.float64, copy=False),
                 y.astype(np.float64, copy=False),
                 LP.astype(np.float64, copy=False),
-                WFsRaw.astype(np.float64, copy=False).ravel(),  # 1D (importante)
+                WFsRaw.astype(np.float64, copy=False),
             ]
 
-            # ⚠️ WFsRaw originalmente es 2D (n_points, n_samples)
-            # wu_rootfile soporta vectores 1D: lo guardamos "flatten".
-            # Si quieres reconstruir luego, guardamos también shape:
-            names += ["WFsRaw_shape0", "WFsRaw_shape1"]
-            params += [int(WFsRaw.shape[0]), int(WFsRaw.shape[1])]
-
             # --- escribir ROOT ---
-            wu_rootfile(str(root_path), names, params)
+            wu_rootfile(str(root_path), names, params, tree_name)
 
             summary[file_name] = {
                 "ok": True,

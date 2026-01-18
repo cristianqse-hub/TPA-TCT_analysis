@@ -4,4 +4,3 @@ import ROOT
 import plotly.graph_objects as go
 from IPython.display import HTML, display
 
-2
