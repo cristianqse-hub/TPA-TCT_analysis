@@ -288,7 +288,6 @@ def wu_rootfileList(root_path: list, Gnames: list, Gparams: list, tree_name: str
 from pathlib import Path
 import numpy as np
 
-
 def fromDatafile_fill(
     file_names,
     root_dir,
@@ -296,6 +295,7 @@ def fromDatafile_fill(
     tree_name: str,
     do_flipZ=True,
     do_invertSignal=False,
+    raise_on_error=False,
 ):
     """
     Unifica:
@@ -318,6 +318,8 @@ def fromDatafile_fill(
         Si True: z = data[:,0] * -1000 ; si False: z = data[:,0] * 1000
     do_invertSignal : bool
         Si True: WFsRaw = -data[:,4:] ; si False: WFsRaw = data[:,4:]
+    raise_on_error : bool
+        Si True: relanza la excepción para detectar fallos al crear el tree.
 
     Returns
     -------
@@ -325,6 +327,8 @@ def fromDatafile_fill(
         Resumen por fichero: ok / error / paths
     """
     from utils_lib import wu_rootfile  # o importa donde tengas wu_rootfile
+    import numpy as np
+    from pathlib import Path
 
     root_dir = Path(root_dir)
     raw_dir = Path(raw_dir)
@@ -340,7 +344,6 @@ def fromDatafile_fill(
             timestamp = name_lc[:13] if len(name_lc) >= 13 else ""
 
             voltage_v = 0
-            voltage_Str = ""
             wavelength_nm = 0
             reps = 1
             scan_type = ""
@@ -348,7 +351,6 @@ def fromDatafile_fill(
             for t in tokens:
                 if t.endswith("v") and t[:-1].isdigit():
                     voltage_v = int(t[:-1])
-                    voltage_Str = t[:-1]
 
                 if t.endswith("nm") and t[:-2].isdigit():
                     wavelength_nm = int(t[:-2])
@@ -393,12 +395,10 @@ def fromDatafile_fill(
             WFsRaw = (-1 * data[:, 4:]) if do_invertSignal else data[:, 4:]
 
             # --- preparar names/params para wu_rootfile ---
-            # nombres = nombres exactos de variables / campos
             names = [
                 "name",
                 "timestamp",
                 "voltage_v",
-                "voltage_Str",
                 "wavelength_nm",
                 "reps",
                 "scan_type",
@@ -417,7 +417,6 @@ def fromDatafile_fill(
                 name_lc,
                 timestamp,
                 voltage_v,
-                voltage_Str,
                 wavelength_nm,
                 reps,
                 scan_type,
@@ -448,5 +447,74 @@ def fromDatafile_fill(
                 "ok": False,
                 "error": repr(e),
             }
+            print(f"[ERROR] {file_name}: {e}")
+            if raise_on_error:
+                raise
 
     return summary
+
+def getVals(root_path: str, keys: list):
+    """
+    Lee parámetros de un ROOT file usando especificadores "tree:param".
+
+    Parameters
+    ----------
+    root_path : str
+        Ruta al fichero ROOT.
+    keys : list[str]
+        Lista de strings con formato "tree:param". Cada string indica el TTree
+        y el nombre de la rama/parametro.
+
+    Returns
+    -------
+    dict
+        Mapa {key_spec: value} con valores escalares o np.ndarray para vectores
+        (incluye arrays 2D/N-D).
+    """
+    import ROOT
+    import numpy as np
+
+    def parse_key(spec: str):
+        for sep in (":", "/", "."):
+            if sep in spec:
+                tree, param = spec.split(sep, 1)
+                tree = tree.strip()
+                param = param.strip()
+                if tree and param:
+                    return tree, param
+        raise ValueError(f"Formato inválido para '{spec}'. Usa 'tree:param'.")
+
+    def vector_to_list(obj):
+        cls = obj.__class__.__name__ if hasattr(obj, "__class__") else ""
+        if "vector" in cls:
+            return [vector_to_list(v) for v in obj]
+        return obj
+
+    f = ROOT.TFile.Open(root_path)
+    if not f or f.IsZombie():
+        raise RuntimeError(f"No se pudo abrir: {root_path}")
+
+    out = {}
+
+    for spec in keys:
+        tree_name, param = parse_key(spec)
+        t = f.Get(tree_name)
+        if not t:
+            raise KeyError(f"No existe el TTree '{tree_name}' en {root_path}")
+        if t.GetEntries() == 0:
+            raise ValueError(f"El TTree '{tree_name}' no tiene entradas")
+        t.GetEntry(0)
+        if not hasattr(t, param):
+            raise KeyError(f"No existe la rama '{param}' en '{tree_name}'")
+        val = getattr(t, param)
+        cls = val.__class__.__name__ if hasattr(val, "__class__") else ""
+        if "vector" in cls:
+            out[spec] = np.asarray(vector_to_list(val))
+        elif "string" in cls:
+            out[spec] = str(val)
+        else:
+            out[spec] = val
+
+    f.Close()
+    return out
+
