@@ -117,13 +117,16 @@ def plot_root_param_xy(
 
     png_path = out_dir / f"{out_name}.png"
     pio.write_image(fig, str(png_path))
-
+    print(png_path)
+    
     html_path = None
     if write_html:
         html_path = out_dir / f"{out_name}.html"
         fig.write_html(str(html_path))
+        print(html_path)
 
     if show:
         fig.show(renderer="png")
+        
 
     return str(png_path), str(html_path) if html_path else None
