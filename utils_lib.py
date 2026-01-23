@@ -518,3 +518,44 @@ def getVals(root_path: str, keys: list):
     f.Close()
     return out
 
+
+
+def reshape_paramReps(root_path: str, param_spec: str):
+    """
+    Reshape a vector into a reps x n matrix based on Raw:reps and store R/A/E outputs.
+    """
+    vals = getVals(root_path, ["Raw:reps", param_spec])
+    reps = int(vals["Raw:reps"])
+    data = np.asarray(vals[param_spec])
+
+    if data.ndim != 1:
+        raise ValueError("El parámetro debe ser un vector 1D")
+    if reps <= 0:
+        raise ValueError("Raw:reps debe ser > 0")
+    if data.size % reps != 0:
+        raise ValueError("El tamaño del vector no es divisible por Raw:reps")
+
+    rows = reps
+    cols = data.size // reps
+    reshaped = data.reshape((rows, cols))
+    avg = reshaped.mean(axis=0)
+    std = reshaped.std(axis=0)
+
+    if ":" not in param_spec:
+        raise ValueError("param_spec debe tener formato 'tree:param'")
+    tree_name, param = param_spec.split(":", 1)
+    tree_name = tree_name.strip()
+    param = param.strip()
+    if not tree_name or not param:
+        raise ValueError("param_spec debe tener formato 'tree:param'")
+
+    features_names = [f"{param}_R", f"{param}_A", f"{param}_E"]
+    features_values = [reshaped, avg, std]
+
+    wu_rootfile(root_path, features_names, features_values, tree_name)
+
+    return {
+        "reps": reps,
+        "rows": rows,
+        "cols": cols,
+    }

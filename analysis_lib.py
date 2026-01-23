@@ -1,7 +1,7 @@
 import numpy as np
 
 from utils_lib import getVals, wu_rootfile
-
+from pathlib import Path
 
 def analyze_wfsraw(
     root_path: str,
@@ -71,9 +71,10 @@ def analyze_wfsraw(
 
     return None
 
+
 def get_signalsROI(
     root_path: str,
-    interp_nsamples=20,
+    interp_nsamples=5,
     do_aTleft: bool = False,
     do_aTRight: bool = False,
     mask_ignoreLeft: bool = True,
@@ -138,8 +139,8 @@ def get_signalsROI(
     minV = np.min(signals, axis=1)
     BLLevel = np.zeros(n_events)
 
-    TLeft_sig = np.full(n_events, np.nan)
-    TRight_sig = np.full(n_events, np.nan)
+    TLeft_sig = np.full(n_events, aTRight)
+    TRight_sig = np.full(n_events, aTRight)
 
     for idx in range(n_events):
         wf = signals[idx]
@@ -210,3 +211,194 @@ def get_signalsROI(
     wu_rootfile(root_path, features_names, features_values, "Signal")
 
     return None
+
+def integrate_charge(
+    root_path: str,
+    t_spec: str,
+    signals_spec: str,
+    saveto: str,
+    unitfactor=1,
+):
+    """
+    Integrate signals with trapezoidal rule and store charge vector.
+    """
+    vals = getVals(root_path, [t_spec, signals_spec])
+    t = np.asarray(vals[t_spec])
+    signals = np.asarray(vals[signals_spec])
+
+    signals = np.nan_to_num(signals, nan=0.0)
+
+    charge = np.trapz(signals, x=t, axis=1) * float(unitfactor)
+
+    if ":" not in saveto:
+        raise ValueError("saveto debe tener formato 'tree:param'")
+    tree_name, param = saveto.split(":", 1)
+    tree_name = tree_name.strip()
+    param = param.strip()
+    if not tree_name or not param:
+        raise ValueError("saveto debe tener formato 'tree:param'")
+
+    wu_rootfile(root_path, [param], [charge], tree_name)
+
+    return charge
+
+def correct_Signals(
+    root_path: str,
+    mode: str = "COR",  # Mode COR - TPA
+):
+    vals = getVals(root_path, ["Signal:signals", "Signal:mask", "Raw:LP"])
+    signals = np.asarray(vals["Signal:signals"])
+    mask = np.asarray(vals["Signal:mask"])
+    LP = np.asarray(vals["Raw:LP"])
+
+    n_events  = signals.shape[0]
+    n_samples = signals.shape[1]
+
+    if mode == "COR": # RAW TPA = S / LP^2 -> No spa substraction
+        signals_COR = signals / LP[:, np.newaxis] / LP[:, np.newaxis]
+        signals_COR_masked = np.where(mask, signals_COR, np.nan)    
+            
+        wu_rootfile(root_path, 
+                    ["signals_COR", "signals_COR_masked"], 
+                    [signals_COR, signals_COR_masked],
+                    "Signal")
+
+
+
+def zscan_profileAnalisis(
+    root_file: str,
+    charge_profile: str,
+    mode: str = "Partial",
+    partial_threshold: float = 1.0,
+    show_plot: bool = True,
+):
+    """
+    Zscan charge profile analysis.
+    modes:
+        "Partial" -> Single fit for rising edge.
+    """
+    from scipy.optimize import curve_fit
+    import plotly.graph_objects as go
+    from scipy.interpolate import interp1d
+
+    def func_ChargePartial(x, a, z0, Rl, SPA):
+        return a * ((np.arctan((x-z0)/Rl) + np.pi/2) / np.pi) + SPA
+
+    vals = getVals(root_file, ["Raw:z_R", f"{charge_profile}_R"])
+    z = np.asarray(vals["Raw:z_R"])
+    charge = np.asarray(vals[f"{charge_profile}_R"])
+
+    reps = charge.shape[0]
+    features_names = []
+    features_pars = []
+
+    
+
+    ### MODES
+
+    if mode == "Partial":
+        spa = np.full(reps, np.nan)
+        z0 = np.full(reps, np.nan)
+        Rl = np.full(reps, np.nan)
+
+        fig = go.Figure() if show_plot else None
+
+        for i in range(reps):
+            _charge = charge[i, :].astype(float, copy=True)
+            max_val = np.nanmax(_charge)
+            if max_val != 0:
+                _charge = _charge / max_val
+
+            idx = np.argmax(_charge >= partial_threshold)
+            if _charge[idx] < partial_threshold:
+                idx = _charge.size
+
+            _z = z[i, :idx]
+            _charge = _charge[:idx]
+
+            #
+            idxP0 = np.argmax(_charge >= 0.5)
+            if _charge[idxP0] < partial_threshold:
+                idxP0 = _charge.size
+
+            try:
+                p, _ = curve_fit(
+                    func_ChargePartial,
+                    _z,
+                    _charge,
+                    p0=[1, z[i, idxP0], 1.5, 0],
+                    bounds=(
+                        [-np.inf, -np.inf, -np.inf, -np.inf],  # límites inferiores
+                        [ np.inf,  np.inf, np.inf, np.inf]  # superiores
+                    )
+                )
+
+                z0[i] = p[1]
+                Rl[i] = p[2]
+                spa[i] = p[3] * max_val
+
+                if show_plot:
+                    z_fit = np.linspace(_z.min(), _z.max(), 100)
+                    charge_fit = func_ChargePartial(z_fit, *p)
+                    fig.add_trace(
+                        go.Scatter(x=_z, y=_charge, mode="markers", showlegend=False)
+                    )
+                    fig.add_trace(
+                        go.Scatter(x=z_fit, y=charge_fit, mode="lines", showlegend=False)
+                    )
+
+            except Exception:
+                print(f"Fit for file {root_file} rep={i} has failed")
+
+        features_names += ["z0", "Rl", "spa"]
+        features_pars += [z0, Rl, spa]
+
+        if show_plot:
+            fig.update_layout(
+                title=f"Zscan - profile fit ({charge_profile})",
+                xaxis_title="z",
+                yaxis_title="charge (norm)",
+            )
+            fig.show()
+
+        
+
+    ### BASE parameters
+    FWHM = np.full(reps, np.nan)
+    for i in range(reps):
+        _charge = charge[i, :].astype(float, copy=True) 
+        _z = z[i, :].astype(float, copy=True)
+        # Interpolate
+        z_int = np.linspace(_z.min(), _z.max(), int(_z.size) * 10)
+        f = interp1d(_z, _charge, kind="linear", bounds_error=False, fill_value=np.nan)
+        charge_int = f(z_int)
+        charge_int /= np.nanmax(charge_int)
+        FWHM[i] = len(charge_int[ (charge_int >= 0.5) ]) * (z_int[1] - z_int[0])
+
+    features_names += ["FWHM"]
+    features_pars += [FWHM]
+
+    if show_plot:
+        print(Path(root_file).stem)
+        for i, name in enumerate(features_names):
+            print(f"Param {name} = {features_pars[i]}" )
+
+    # all charge vector in one
+    z_cor = z - z0[:, np.newaxis]
+    z_vec = z_cor.ravel()
+    charge_vec = charge.ravel()
+
+    zcharge = np.zeros([2, len(z_vec)])
+    # Short both by z
+    idx = np.argsort(z_vec)
+    zcharge[0, :] = z_vec[idx] 
+    zcharge[1, :] = charge_vec[idx] 
+
+    features_names += ["zcharge"]
+    features_pars += [zcharge]
+
+    if features_names:
+        wu_rootfile(root_file, features_names, features_pars, "zscan")
+
+
+

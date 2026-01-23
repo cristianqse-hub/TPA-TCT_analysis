@@ -130,3 +130,12 @@ def plot_root_param_xy(
         
 
     return str(png_path), str(html_path) if html_path else None
+
+
+def plot_WFs(root_path, 
+             signals: str, # tree:par
+             legend_pars: list ,# list with parameters to show as legend as f"{namepar1}: {par} | ..."
+             subsection: list = [], # specify a selecion of signals like format ex: ["from:to:step"], if from or to not specified is the beggining and end, if step not defined =1, can concatenate like ["0:10:", "11::5"]
+             cut_limits: list = ["tree:par1;valmin;valmax", ...], # min and max signal value cuts for a set of parameters, do not display signals out of those limits min and max respec. None = ignore limit, ex: ["Raw:z;None;20", ""Charge:COR_A;1e-20;2e-20""]
+             norm_signals: str = "" # tree:par (a vector so, each signal being normalized (/) by its own parameter), if empty ignore
+             ):
