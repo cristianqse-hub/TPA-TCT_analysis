@@ -25,6 +25,7 @@ def analyze_wfsraw(
     bl_mask = t <= aTBL
     if np.any(bl_mask):
         BLLevel = np.mean(wfs_raw[:, bl_mask], axis=1)
+        noise = np.std(wfs_raw[:, bl_mask], axis=1)
     else:
         BLLevel = np.full(n_events, np.nan)
 
@@ -48,6 +49,7 @@ def analyze_wfsraw(
         "maxV",
         "minV",
         "BLLevel",
+        "noise",
         "TLeft",
         "TRight",
     ]
@@ -55,6 +57,7 @@ def analyze_wfsraw(
         maxV,
         minV,
         BLLevel,
+        noise,
         TLeft,
         TRight,
     ]
@@ -209,6 +212,72 @@ def get_signalsROI(
             pass
 
     wu_rootfile(root_path, features_names, features_values, "Signal")
+
+    return None
+
+def analyze_signalsROI(
+    root_path: str,
+    signals_spec: str = "Signal:signals",
+    output_tree: str = "Signal",
+    thresholds=None,
+):
+    """
+    Compute peak time, collection times, and SNR from ROI signals.
+    """
+    if thresholds is None:
+        thresholds = [0, 5, 10, 25, 50]
+
+    if ":" in signals_spec:
+        tree_name, _ = signals_spec.split(":", 1)
+        t_spec = f"{tree_name}:t"
+    else:
+        t_spec = "Signal:t"
+
+    vals = getVals(root_path, [signals_spec, t_spec, "Raw:noise"])
+    signals = np.asarray(vals[signals_spec])
+    t = np.asarray(vals[t_spec])
+    noise = np.asarray(vals["Raw:noise"])
+
+    n_events = signals.shape[0]
+    n_thresholds = len(thresholds)
+
+    if noise.ndim == 0:
+        noise = np.full(n_events, float(noise))
+
+    peakRime = np.full(n_events, np.nan)
+    tColl = np.full((n_thresholds, n_events), np.nan)
+    SNR = np.full(n_events, np.nan)
+
+    for idx in range(n_events):
+        sig = signals[idx]
+        if sig.size == 0 or np.all(np.isnan(sig)):
+            continue
+        max_idx = int(np.nanargmax(sig))
+        max_val = sig[max_idx]
+        if max_idx < t.size:
+            peakRime[idx] = t[max_idx]
+
+        if noise[idx] != 0:
+            SNR[idx] = max_val / noise[idx]
+
+        for jdx, thr in enumerate(thresholds):
+            level = max_val * (float(thr) / 100.0)
+            left_segment = sig[: max_idx + 1]
+            left_rev_indices = np.where(left_segment[::-1] <= level)[0]
+            right_indices = np.where(sig[max_idx:] <= level)[0]
+            if left_rev_indices.size == 0 or right_indices.size == 0:
+                continue
+            left_idx = max_idx - left_rev_indices[0]
+            right_idx = max_idx + right_indices[0]
+            if right_idx < t.size and left_idx < t.size:
+                tColl[jdx, idx] = t[right_idx] - t[left_idx]
+
+    wu_rootfile(
+        root_path,
+        ["peakRime", "tColl", "SNR"],
+        [peakRime, tColl, SNR],
+        output_tree,
+    )
 
     return None
 
