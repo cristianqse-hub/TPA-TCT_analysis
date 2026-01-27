@@ -1,6 +1,6 @@
 import numpy as np
 
-from utils_lib import getVals, wu_rootfile
+from utils_lib import getVals, wu_rootfile, reshape_paramReps
 from pathlib import Path
 
 def analyze_wfsraw(
@@ -352,6 +352,9 @@ def zscan_profileAnalisis(
 
     def func_ChargePartial(x, a, z0, Rl, SPA):
         return a * ((np.arctan((x-z0)/Rl) + np.pi/2) / np.pi) + SPA
+    
+    def func_ChargeAsymetric(x, a, z0, z1, Rl0, Rl1, SPA):
+        return a * ((np.arctan((x-z0)/Rl0) + np.pi/2) / np.pi) * ((np.arctan((z1-x)/Rl1) + np.pi/2) / np.pi)  + SPA
 
     vals = getVals(root_file, ["Raw:z_R", f"{charge_profile}_R"])
     z = np.asarray(vals["Raw:z_R"])
@@ -428,9 +431,59 @@ def zscan_profileAnalisis(
                 xaxis_title="z",
                 yaxis_title="charge (norm)",
             )
-            fig.show()
+            fig.show(renderer="png")
 
-        
+    if mode == "Asymetric":
+        spa = np.full(reps, np.nan)
+        z0 = np.full(reps, np.nan)
+        Rl = np.full(reps, np.nan)
+
+        fig = go.Figure() if show_plot else None
+
+        for i in range(reps):
+            _charge = charge[i, :].astype(float, copy=True)
+            max_val = np.nanmax(_charge)
+            if max_val != 0:
+                _charge = _charge / max_val
+
+            _z = z[i, :]
+            _charge = _charge[:]
+
+            try:
+                p, _ = curve_fit(
+                    func_ChargeAsymetric,
+                    _z,
+                    _charge,
+                    p0=[1, 20, 40, 1.5, 3.0, 0]
+                )
+
+                z0[i] = p[1]
+                Rl[i] = p[3]
+                spa[i] = p[5] * max_val
+
+                if show_plot:
+                    z_fit = np.linspace(_z.min(), _z.max(), 100)
+                    charge_fit = func_ChargeAsymetric(z_fit, *p)
+                    fig.add_trace(
+                        go.Scatter(x=_z, y=_charge, mode="markers", showlegend=False)
+                    )
+                    fig.add_trace(
+                        go.Scatter(x=z_fit, y=charge_fit, mode="lines", showlegend=False)
+                    )
+
+            except Exception:
+                print(f"Fit for file {root_file} rep={i} has failed")
+
+        features_names += ["z0", "Rl", "spa"]
+        features_pars += [z0, Rl, spa]
+
+        if show_plot:
+            fig.update_layout(
+                title=f"Zscan - profile fit ({charge_profile})",
+                xaxis_title="z",
+                yaxis_title="charge (norm)",
+            )
+            fig.show(renderer="png")
 
     ### BASE parameters
     FWHM = np.full(reps, np.nan)
@@ -444,8 +497,13 @@ def zscan_profileAnalisis(
         charge_int /= np.nanmax(charge_int)
         FWHM[i] = len(charge_int[ (charge_int >= 0.5) ]) * (z_int[1] - z_int[0])
 
-    features_names += ["FWHM"]
-    features_pars += [FWHM]
+    width = np.full(reps, np.nan)
+    for i in range(reps):
+        width[i] = np.sqrt(FWHM[i]**2+Rl[i]**2)
+
+
+    features_names += ["FWHM", "width"]
+    features_pars += [FWHM, width]
 
     if show_plot:
         print(Path(root_file).stem)

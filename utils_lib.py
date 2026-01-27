@@ -520,12 +520,18 @@ def getVals(root_path: str, keys: list):
 
 
 
-def reshape_paramReps(root_path: str, param_spec: str):
+def reshape_paramReps(root_path: str, param_spec: str, aux_reps=1):
     """
     Reshape a vector into a reps x n matrix based on Raw:reps and store R/A/E outputs.
     """
-    vals = getVals(root_path, ["Raw:reps", param_spec])
-    reps = int(vals["Raw:reps"])
+
+    try:
+        vals = getVals(root_path, ["Raw:reps", param_spec])
+        reps = int(vals["Raw:reps"])
+    except:
+        vals = getVals(root_path, [param_spec])
+        reps = aux_reps 
+
     data = np.asarray(vals[param_spec])
 
     if data.ndim != 1:
@@ -559,3 +565,41 @@ def reshape_paramReps(root_path: str, param_spec: str):
         "rows": rows,
         "cols": cols,
     }
+
+def group_analysis(files_list, output_file, parameter_treepar, output_treepar):
+    """
+    Agrupa parámetros de varios ROOT files en una sola matriz/vector.
+    """
+    if ":" not in parameter_treepar:
+        raise ValueError("parameter_treepar debe tener formato 'tree:param'")
+    if ":" not in output_treepar:
+        raise ValueError("output_treepar debe tener formato 'tree:param'")
+    
+    val = getVals(files_list[0], [parameter_treepar])[parameter_treepar]
+    arr = np.asarray(val)
+    try:
+        dim_parameter = arr.shape[0] if arr.shape[0]>1 else arr.shape[1]
+    except:
+        dim_parameter = 1
+
+    shift = int(len(files_list))
+
+    values = np.zeros([int(shift*dim_parameter)])
+
+    for i, root_path in enumerate(files_list):
+        val = getVals(root_path, [parameter_treepar])[parameter_treepar]
+        arr = np.asarray(val)
+        if dim_parameter >1:
+            for j, jval in enumerate(arr):
+                values[i+(j*shift)] = jval
+        else:
+            values[i] = val
+
+    values = np.array(values)
+    out_tree, out_param = output_treepar.split(":", 1)
+    out_tree = out_tree.strip()
+    out_param = out_param.strip()
+    wu_rootfile(output_file, [out_param], [values], out_tree)
+
+    if dim_parameter > 1:
+        reshape_paramReps(output_file, output_treepar, aux_reps=dim_parameter)

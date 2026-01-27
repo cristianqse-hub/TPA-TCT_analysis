@@ -250,3 +250,33 @@ def plot_WFs(
 
     fig.update_layout(xaxis_title="sample", yaxis_title=signals)
     fig.show()
+
+
+# -------------------------------
+# Layout helper (TITLE + LABELS)
+# -------------------------------
+def finalize_figure(fig, root_files, generic_title, labels = ""):
+    if len(root_files) == 1:
+        title = root_files[0]
+    else:
+        title = generic_title
+
+    if labels == "":
+        fig.update_layout(
+            title=title,
+            xaxis_title="z [um]",
+            yaxis_title="Charge [C]",
+            legend_title="Voltage",
+            template="plotly_white"
+        )
+    else:
+        a, b, c = labels.split(";") 
+        fig.update_layout(
+            title=title,
+            xaxis_title=a,
+            yaxis_title=b,
+            legend_title=c,
+            template="plotly_white"
+        )
+
+    return fig
