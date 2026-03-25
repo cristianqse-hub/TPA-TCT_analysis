@@ -108,6 +108,8 @@ def plot_root_param_xy(
     ylabel = labels[2] if labels and len(labels) > 2 else y_param
 
     fig.update_layout(title=title, xaxis_title=xlabel, yaxis_title=ylabel)
+    fig.update_layout(width=800,  height=600)
+
 
     if limits:
         xmin, xmax, ymin, ymax = limits
@@ -153,6 +155,7 @@ def plot_WFs(
         cut_limits = []
 
     specs = [signals]
+    specs += ["Signal:t"]
     specs += legend_pars
     if norm_signals:
         specs.append(norm_signals)
@@ -175,6 +178,7 @@ def plot_WFs(
 
     vals = getVals(root_path, specs)
     signals_mat = np.asarray(vals[signals])
+    t = np.asarray(vals["Signal:t"])
     n_events = signals_mat.shape[0]
     n_samples = signals_mat.shape[1]
 
@@ -224,7 +228,7 @@ def plot_WFs(
         ]
 
     fig = go.Figure()
-    x = np.arange(n_samples)
+    x = t - t[0]
 
     for j, idx in enumerate(indices):
         legend_parts = []
@@ -249,13 +253,24 @@ def plot_WFs(
         )
 
     fig.update_layout(xaxis_title="sample", yaxis_title=signals)
-    fig.show()
+    fig.update_layout(width=800,  height=600)
 
+    fig.show()
 
 # -------------------------------
 # Layout helper (TITLE + LABELS)
 # -------------------------------
-def finalize_figure(fig, root_files, generic_title, labels = ""):
+def finalize_figure(
+    fig,
+    root_files,
+    generic_title,
+    labels="",
+    xlim=None,
+    ylim=None,
+    width=800,
+    height=600
+):
+    
     if len(root_files) == 1:
         title = root_files[0]
     else:
@@ -267,16 +282,27 @@ def finalize_figure(fig, root_files, generic_title, labels = ""):
             xaxis_title="z [um]",
             yaxis_title="Charge [C]",
             legend_title="Voltage",
-            template="plotly_white"
+            template="plotly_white",
+            width=width,
+            height=height
         )
     else:
-        a, b, c = labels.split(";") 
+        a, b, c = labels.split(";")
         fig.update_layout(
             title=title,
             xaxis_title=a,
             yaxis_title=b,
             legend_title=c,
-            template="plotly_white"
+            template="plotly_white",
+            width=width,
+            height=height
         )
+
+    # Apply axis limits only if provided
+    if xlim is not None:
+        fig.update_xaxes(range=xlim)
+
+    if ylim is not None:
+        fig.update_yaxes(range=ylim)
 
     return fig
