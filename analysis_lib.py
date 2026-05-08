@@ -134,6 +134,8 @@ def get_signalsROI(
     tleft_drop: float = 0.95,   # 10% de caída => umbral al 90% del pico
     tright_drop: float = 0.99,  # idem derecha
     use_crossing: bool = True,  # True: cruce + interpolación; False: primer sample <= thr
+    complete_rightRoi_From: float = -1.0,  # <0 desactivado; (0,1) activa ajuste parabólico de la cola derecha
+    doUse_tRight_fromMax: bool = False,  # usa el TRight de la señal con mayor pico para enmascarar todo
 ):
     """
     Generate ROI from signals with mask.
@@ -143,6 +145,12 @@ def get_signalsROI(
         thr = (1 - drop) * max(wf)
       (pulsos positivos).
     - Si el cruce no se encuentra, se deja aTLeft/aTRight como fallback.
+    - Si 0 < complete_rightRoi_From < 1, tiene prioridad para TRight:
+      usa los últimos 3 puntos normalizados >= umbral (a la derecha del pico),
+      ajusta parábola y toma su primera intersección con baseline (y=0).
+      Además, reconstruye la cola con esa parábola hasta TRight.
+    - Si doUse_tRight_fromMax=True, aplica a todas las señales el TRight de la
+      señal con mayor pico (TRight calculado con la lógica normal activa).
     """
     vals = getVals(
         root_path,
@@ -197,18 +205,17 @@ def get_signalsROI(
     t = np.linspace(t_roi[0], t_roi[-1], max(2, len(t_roi) * interp_nsamples))
     signals = np.vstack([np.interp(t, t_roi, row) for row in wfs_roi])
 
-    maxV = np.max(signals, axis=1)
-    minV = np.min(signals, axis=1)
-    BLLevel = np.zeros(n_events)
-
     # FIX: fallback correcto (antes tenías aTRight en TLeft_sig)
     TLeft_sig = np.full(n_events, aTLeft)
     TRight_sig = np.full(n_events, aTRight)
+    BLLevel = np.zeros(n_events)
 
     if not (0.0 < tleft_drop < 1.0):
         raise ValueError("tleft_drop debe estar entre 0 y 1 (ej: 0.10).")
     if not (0.0 < tright_drop < 1.0):
         raise ValueError("tright_drop debe estar entre 0 y 1 (ej: 0.10).")
+
+    do_complete_right = 0.0 < complete_rightRoi_From < 1.0
 
     for idx in range(n_events):
         wf = signals[idx]
@@ -249,6 +256,32 @@ def get_signalsROI(
         right = wf[max_idx:]
         right_t = t[max_idx:]
 
+        # ---- TRight prioritario por ajuste parabólico en la cola ----
+        if do_complete_right:
+            right_norm = right / peak
+            thr_idx_rel = np.where(right_norm >= complete_rightRoi_From)[0]
+            if thr_idx_rel.size >= 3:
+                fit_rel = thr_idx_rel[-3:]
+                fit_idx = max_idx + fit_rel
+                fit_t = t[fit_idx]
+                fit_y = wf[fit_idx]
+
+                # np.polyfit de grado 2 necesita 3 x distintas.
+                if np.unique(fit_t).size == 3:
+                    coeffs = np.polyfit(fit_t, fit_y, 2)
+                    roots = np.roots(coeffs)
+                    x_start = fit_t[-1]
+                    roots_real = sorted(
+                        r.real for r in roots
+                        if np.isfinite(r.real) and np.isclose(r.imag, 0.0) and r.real >= x_start
+                    )
+                    if roots_real:
+                        TRight_sig[idx] = roots_real[0]
+                        tail_mask = (t > x_start) & (t <= TRight_sig[idx])
+                        if np.any(tail_mask):
+                            wf[tail_mask] = np.polyval(coeffs, t[tail_mask])
+                        continue
+
         if use_crossing:
             # cruce en la bajada: right[i] > thr y right[i+1] <= thr
             cross_r = np.where((right[:-1] > thr_right) & (right[1:] <= thr_right))[0]
@@ -265,6 +298,15 @@ def get_signalsROI(
             ridx = np.where(right <= thr_right)[0]
             if ridx.size > 0:
                 TRight_sig[idx] = right_t[ridx[0]]
+
+    maxV = np.max(signals, axis=1)
+    minV = np.min(signals, axis=1)
+
+    if doUse_tRight_fromMax and np.any(np.isfinite(maxV)):
+        idx_ref = int(np.nanargmax(maxV))
+        t_right_ref = TRight_sig[idx_ref]
+        if np.isfinite(t_right_ref):
+            TRight_sig[:] = t_right_ref
 
     mask = np.ones_like(signals, dtype=bool)
     if not mask_ignoreLeft:
@@ -449,7 +491,156 @@ def get_signalsROIddd(
 
     return None
 
+
 def analyze_signalsROI(
+    root_path: str,
+    signals_spec: str = "Signal:signals",
+    output_tree: str = "Signal",
+    thresholds=None,
+):
+    """
+    Compute peak time, collection times, SNR, and rise time from ROI signals.
+
+    - tColl:
+        Igual que antes. Si no encuentra punto <= threshold por izquierda
+        o derecha, deja NaN.
+
+    - tColl_window:
+        Similar a tColl, pero si no encuentra el cruce por un lado,
+        usa el límite válido de la ventana temporal:
+            izquierda -> primer punto no-NaN de la señal
+            derecha   -> último punto no-NaN de la señal
+    """
+    if thresholds is None:
+        thresholds = [0, 5, 10, 25, 50]
+
+    if ":" in signals_spec:
+        tree_name, _ = signals_spec.split(":", 1)
+        t_spec = f"{tree_name}:t"
+    else:
+        t_spec = "Signal:t"
+
+    vals = getVals(root_path, [signals_spec, t_spec, "Raw:noise"])
+    signals = np.asarray(vals[signals_spec])
+    t = np.asarray(vals[t_spec])
+    noise = np.asarray(vals["Raw:noise"])
+
+    n_events = signals.shape[0]
+    n_thresholds = len(thresholds)
+
+    if noise.ndim == 0:
+        noise = np.full(n_events, float(noise))
+
+    peakTime = np.full(n_events, np.nan)
+    tColl = np.full((n_thresholds, n_events), np.nan)
+    tColl_window = np.full((n_thresholds, n_events), np.nan)
+    SNR = np.full(n_events, np.nan)
+    riseTime = np.full(n_events, np.nan)
+
+    for idx in range(n_events):
+        sig = signals[idx]
+
+        if sig.size == 0 or np.all(np.isnan(sig)):
+            continue
+
+        valid = np.where(np.isfinite(sig))[0]
+        if valid.size == 0:
+            continue
+
+        first_valid_idx = valid[0]
+        last_valid_idx = valid[-1]
+
+        max_idx = int(np.nanargmax(sig))
+        max_val = sig[max_idx]
+
+        if max_idx < t.size:
+            peakTime[idx] = t[max_idx]
+
+        if noise[idx] != 0:
+            SNR[idx] = max_val / noise[idx]
+
+        # ----------------------------------------------------
+        # TColl y TColl_window
+        # ----------------------------------------------------
+        for jdx, thr in enumerate(thresholds):
+            level = max_val * (float(thr) / 100.0)
+
+            left_segment = sig[: max_idx + 1]
+            right_segment = sig[max_idx:]
+
+            left_rev_indices = np.where(left_segment[::-1] <= level)[0]
+            right_indices = np.where(right_segment <= level)[0]
+
+            # -------- tColl original --------
+            # Debug: comprobar por qué falla tColl
+            if left_rev_indices.size == 0:
+                print(
+                    f"[tColl][LEFT] "
+                    f"event={idx} "
+                    f"thr={thr}% "
+                    f"level={level:.4e} "
+                    f"No sample <= threshold on LEFT side"
+                )
+
+            if right_indices.size == 0:
+                print(
+                    f"[tColl][RIGHT] "
+                    f"event={idx} "
+                    f"thr={thr}% "
+                    f"level={level:.4e} "
+                    f"No sample <= threshold on RIGHT side"
+    )
+
+            if left_rev_indices.size > 0 and right_indices.size > 0:
+                left_idx = max_idx - left_rev_indices[0]
+                right_idx = max_idx + right_indices[0]
+
+                if right_idx < t.size and left_idx < t.size:
+                    tColl[jdx, idx] = t[right_idx] - t[left_idx]
+
+            # -------- tColl_window --------
+            if left_rev_indices.size > 0:
+                left_idx_w = max_idx - left_rev_indices[0]
+            else:
+                left_idx_w = first_valid_idx
+
+            if right_indices.size > 0:
+                right_idx_w = max_idx + right_indices[0]
+            else:
+                right_idx_w = last_valid_idx
+
+            if (
+                left_idx_w < t.size
+                and right_idx_w < t.size
+                and right_idx_w >= left_idx_w
+            ):
+                tColl_window[jdx, idx] = t[right_idx_w] - t[left_idx_w]
+
+        # ----------------------------------------------------
+        # Rise time
+        # ----------------------------------------------------
+        lseg = sig[:max_idx + 1][::-1]
+
+        i90 = np.where(lseg <= 0.9 * max_val)[0]
+        i10 = np.where(lseg <= 0.1 * max_val)[0]
+
+        if i90.size and i10.size:
+            idx90 = max_idx - i90[0]
+            idx10 = max_idx - i10[0] + 1
+
+            if idx10 < t.size and idx90 < t.size:
+                riseTime[idx] = t[idx90] - t[idx10]
+
+    wu_rootfile(
+        root_path,
+        ["peakTime", "tColl", "tColl_window", "SNR", "riseTime"],
+        [peakTime, tColl, tColl_window, SNR, riseTime],
+        output_tree,
+    )
+
+    return None
+
+def analyze_signalsROIss(
     root_path: str,
     signals_spec: str = "Signal:signals",
     output_tree: str = "Signal",
@@ -478,9 +669,10 @@ def analyze_signalsROI(
     if noise.ndim == 0:
         noise = np.full(n_events, float(noise))
 
-    peakRime = np.full(n_events, np.nan)
+    peakTime = np.full(n_events, np.nan)
     tColl = np.full((n_thresholds, n_events), np.nan)
     SNR = np.full(n_events, np.nan)
+    riseTime = np.full(n_events, np.nan)
 
     for idx in range(n_events):
         sig = signals[idx]
@@ -489,10 +681,12 @@ def analyze_signalsROI(
         max_idx = int(np.nanargmax(sig))
         max_val = sig[max_idx]
         if max_idx < t.size:
-            peakRime[idx] = t[max_idx]
+            peakTime[idx] = t[max_idx]
 
         if noise[idx] != 0:
             SNR[idx] = max_val / noise[idx]
+
+        # TColl
 
         for jdx, thr in enumerate(thresholds):
             level = max_val * (float(thr) / 100.0)
@@ -506,10 +700,23 @@ def analyze_signalsROI(
             if right_idx < t.size and left_idx < t.size:
                 tColl[jdx, idx] = t[right_idx] - t[left_idx]
 
+        # Rise time
+
+        lseg = sig[:max_idx + 1][::-1]
+
+        i90 = np.where(lseg <= 0.9 * max_val)[0]
+        i10 = np.where(lseg <= 0.1 * max_val)[0]
+
+        if i90.size and i10.size:
+            idx90 = max_idx - i90[0]
+            idx10 = max_idx - i10[0] + 1
+            if idx10 < t.size and idx90 < t.size:
+                riseTime[idx] = t[idx90] - t[idx10]
+
     wu_rootfile(
         root_path,
-        ["peakRime", "tColl", "SNR"],
-        [peakRime, tColl, SNR],
+        ["peakTime", "tColl", "SNR", "riseTime"],
+        [peakTime, tColl, SNR, riseTime],
         output_tree,
     )
 
@@ -547,7 +754,238 @@ def integrate_charge(
 
 def correct_Signals(
     root_path: str,
-    mode: str = "COR",  # Mode COR - TPA
+    mode: str = "COR",  # COR - TPA - TPA_tleft
+    tpa_cor_factor=2.0,
+    spa_WFsamplesNumber=10,
+    smoothing=False,
+    shift_upTo: int = 2,
+):
+    vals = getVals(root_path, ["Signal:signals", "Signal:mask", "Raw:LP"])
+    signals = np.asarray(vals["Signal:signals"], dtype=float)
+    mask = np.asarray(vals["Signal:mask"]).astype(bool)
+    LP = np.asarray(vals["Raw:LP"], dtype=float)
+
+    n_events, n_samples = signals.shape
+
+    def shift_waveform(y, shift_samples, fill=np.nan):
+        x = np.arange(y.size)
+        return np.interp(
+            x,
+            x + shift_samples,
+            y,
+            left=fill,
+            right=fill
+        )
+
+    if mode == "COR":
+        signals_COR = signals / (LP[:, np.newaxis] ** tpa_cor_factor)
+        signals_COR_masked = np.where(mask, signals_COR, np.nan)
+
+        maxVcorr = np.max(signals_COR, axis=1)
+        maxVcorr = maxVcorr / np.mean(signals_COR) * np.mean(signals)
+
+        wu_rootfile(
+            root_path,
+            ["signals_COR", "signals_COR_masked", "maxVcorr"],
+            [signals_COR, signals_COR_masked, maxVcorr],
+            "Signal",
+        )
+
+    elif mode == "TPA":
+        temp_signals = signals / LP[:, np.newaxis]
+        amplitudes = np.nanmax(temp_signals, axis=1)
+        order = np.argsort(amplitudes)
+
+        n_spa = max(1, min(int(spa_WFsamplesNumber), n_events))
+        spa_aver_wf = np.nanmean(temp_signals[order[:n_spa]], axis=0)
+
+        if smoothing:
+            spa_aver_wf = np.convolve(spa_aver_wf, np.ones(3) / 3, mode="same")
+
+        tpa_uncorrected = temp_signals - spa_aver_wf[None, :]
+        signals_TPA = tpa_uncorrected / LP[:, np.newaxis]
+        signals_TPA_masked = np.where(mask, signals_TPA, np.nan)
+
+        wu_rootfile(
+            root_path,
+            ["signals_TPA", "signals_TPA_masked"],
+            [signals_TPA, signals_TPA_masked],
+            "Signal",
+        )
+
+    elif mode == "TPA_tleft":
+        vals_tleft = getVals(root_path, ["Signal:TLeft"])
+        TLeft = np.asarray(vals_tleft["Signal:TLeft"], dtype=float)
+
+        temp_signals = signals / LP[:, np.newaxis]
+        amplitudes = np.nanmax(temp_signals, axis=1)
+        order = np.argsort(amplitudes)
+
+        n_spa = max(1, min(int(spa_WFsamplesNumber), n_events))
+        spa_idx = order[:n_spa]
+
+        dt = 1.0
+        try:
+            vals_t = getVals(root_path, ["Signal:t"])
+            t = np.asarray(vals_t["Signal:t"], dtype=float)
+            if t.size > 1:
+                dt = float(np.nanmedian(np.diff(t)))
+        except Exception:
+            pass
+
+        ref_tleft = np.nanmedian(TLeft[spa_idx])
+        aligned_spa = np.full((n_spa, n_samples), np.nan)
+
+        for k, idx in enumerate(spa_idx):
+            if not np.isfinite(TLeft[idx]) or not np.isfinite(ref_tleft) or dt == 0:
+                aligned_spa[k] = temp_signals[idx]
+                continue
+
+            shift_samples = (TLeft[idx] - ref_tleft) / dt
+            aligned_spa[k] = shift_waveform(
+                temp_signals[idx],
+                shift_samples,
+                fill=np.nan
+            )
+
+        valid_counts = np.sum(np.isfinite(aligned_spa), axis=0)
+
+        with np.errstate(invalid="ignore"):
+            spa_aver_wf_aligned = np.nanmean(aligned_spa, axis=0)
+
+        spa_aver_wf_aligned[valid_counts == 0] = 0.0
+
+        if smoothing:
+            spa_aver_wf_aligned = np.convolve(
+                spa_aver_wf_aligned,
+                np.ones(3) / 3,
+                mode="same"
+            )
+
+        spa_for_each_event = np.zeros_like(temp_signals)
+
+        for idx in range(n_events):
+            if not np.isfinite(TLeft[idx]) or not np.isfinite(ref_tleft) or dt == 0:
+                spa_for_each_event[idx] = spa_aver_wf_aligned
+                continue
+
+            shift_samples = (ref_tleft - TLeft[idx]) / dt
+            spa_for_each_event[idx] = shift_waveform(
+                spa_aver_wf_aligned,
+                shift_samples,
+                fill=0.0
+            )
+
+        tpa_uncorrected = temp_signals - spa_for_each_event
+        signals_TPA = tpa_uncorrected / LP[:, np.newaxis]
+        signals_TPA_masked = np.where(mask, signals_TPA, np.nan)
+
+        wu_rootfile(
+            root_path,
+            ["signals_TPA", "signals_TPA_masked"],
+            [signals_TPA, signals_TPA_masked],
+            "Signal",
+        )
+
+    elif mode == "TPA_best":
+
+        def shift_waveform_int(y, shift, fill=0.0):
+            y = np.asarray(y, dtype=float)
+            out = np.full_like(y, fill, dtype=float)
+
+            if shift == 0:
+                return y.copy()
+
+            if shift > 0:
+                out[shift:] = y[:-shift]
+            else:
+                out[:shift] = y[-shift:]
+
+            return out
+
+        temp_signals = signals / LP[:, np.newaxis]
+
+        amplitudes = np.nanmax(temp_signals, axis=1)
+        order = np.argsort(amplitudes)
+        n_spa = max(1, min(int(spa_WFsamplesNumber), n_events))
+        spa_idx = order[:n_spa]
+        spa_set = temp_signals[spa_idx]
+
+        if smoothing:
+            spa_set = np.array([
+                np.convolve(wf, np.ones(3) / 3, mode="same")
+                for wf in spa_set
+            ])
+
+        shifts = np.arange(-int(shift_upTo), int(shift_upTo) + 1)
+
+        tpa_uncorrected = np.full_like(temp_signals, np.nan)
+        best_spa_index = np.full(n_events, -1, dtype=int)
+        best_shift = np.full(n_events, 0, dtype=int)
+        best_metric = np.full(n_events, np.nan)
+
+        for idx in range(n_events):
+            sig = temp_signals[idx]
+
+            if sig.size == 0 or np.all(np.isnan(sig)):
+                continue
+
+            best_val = np.inf
+            best_sub = None
+            best_local_spa = -1
+            best_local_shift = 0
+
+            for local_spa_idx, spa_wf in enumerate(spa_set):
+                for shift in shifts:
+                    spa_shifted = shift_waveform_int(spa_wf, shift, fill=0.0)
+                    residual = sig - spa_shifted
+
+                    metric = np.nansum(np.abs(residual))
+
+                    if metric < best_val:
+                        best_val = metric
+                        best_sub = spa_shifted
+                        best_local_spa = local_spa_idx
+                        best_local_shift = shift
+
+            if best_sub is not None:
+                tpa_uncorrected[idx] = sig - best_sub
+                best_spa_index[idx] = spa_idx[best_local_spa]
+                best_shift[idx] = best_local_shift
+                best_metric[idx] = best_val
+
+        signals_TPA = tpa_uncorrected / LP[:, np.newaxis]
+        signals_TPA_masked = np.where(mask, signals_TPA, np.nan)
+
+        wu_rootfile(
+            root_path,
+            [
+                "signals_TPA",
+                "signals_TPA_masked",
+                "TPA_best_spa_index",
+                "TPA_best_shift",
+                "TPA_best_metric",
+            ],
+            [
+                signals_TPA,
+                signals_TPA_masked,
+                best_spa_index,
+                best_shift,
+                best_metric,
+            ],
+            "Signal",
+        )
+
+    else:
+        raise ValueError(
+            f"mode desconocido: {mode}. Usa 'COR', 'TPA' o 'TPA_tleft'."
+        )
+
+    return None
+
+def correct_Signalsddd(
+    root_path: str,
+    mode: str = "COR",  # Mode COR - TPA - TPA_tleft
     tpa_cor_factor = 2.0, 
     spa_WFsamplesNumber=10,
     smoothing=False,
@@ -563,11 +1001,13 @@ def correct_Signals(
     if mode == "COR":  # RAW TPA = S / LP^2 -> No spa substraction
         signals_COR = signals / (LP[:, np.newaxis] ** tpa_cor_factor)
         signals_COR_masked = np.where(mask, signals_COR, np.nan)
+        maxVcorr = np.max(signals_COR, axis=1)
+        maxVcorr = maxVcorr / np.mean(signals_COR) * np.mean(signals)# Reescale
 
         wu_rootfile(
             root_path,
-            ["signals_COR", "signals_COR_masked"],
-            [signals_COR, signals_COR_masked],
+            ["signals_COR", "signals_COR_masked", "maxVcorr"],
+            [signals_COR, signals_COR_masked, maxVcorr],
             "Signal",
         )
     if mode == "TPA":
