@@ -603,3 +603,18 @@ def group_analysis(files_list, output_file, parameter_treepar, output_treepar):
 
     if dim_parameter > 1:
         reshape_paramReps(output_file, output_treepar, aux_reps=dim_parameter)
+
+
+def average_reps(y, reps):
+    y = np.asarray(y, dtype=float)
+
+    n_total = y.size
+    n_z = n_total // reps
+
+    y = y[:reps * n_z]
+    y_rep = y.reshape(reps, n_z)
+
+    y_mean = np.nanmean(y_rep, axis=0)
+    y_std = np.nanstd(y_rep, axis=0)
+
+    return y_mean, y_std, n_z
