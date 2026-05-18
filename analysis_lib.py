@@ -123,6 +123,323 @@ def analyze_wfsraw(
     wu_rootfile(root_path, features_names, features_values, "Raw")
     return None
 
+import numpy as np
+from scipy.signal import savgol_filter
+
+
+def get_signalsROI_savgol(
+    root_path: str,
+    interp_nsamples: int = 5,
+    sg_window: int = 11,
+    sg_polyorder: int = 3,
+    baseline_fraction: float = 0.15,
+    baseline_nsamples: int | None = None,
+    k_deriv_left: float = 5.0,
+    k_deriv_right: float = 5.0,
+    n_consecutive: int = 4,
+    k_amp: float = 3.0,
+    refine_with_amplitude_crossing: bool = True,
+    mask_ignoreLeft: bool = False,
+    mask_ignoreRight: bool = False,
+    do_aTleft: bool = True,
+    do_aTRight: bool = True,
+    doUse_tRight_fromMax: bool = False,
+):
+    """
+    ROI basada en Savitzky–Golay.
+    No usa Raw:aTLeft ni Raw:aTRight para definir la ROI.
+
+    Devuelve en ROOT:
+        maxV, minV, BLLevel, TLeft, TRight,
+        signals, signals_masked, t, mask
+    """
+
+    def robust_sigma(x):
+        x = np.asarray(x, dtype=float)
+        med = np.nanmedian(x)
+        return 1.4826 * np.nanmedian(np.abs(x - med))
+
+    def ensure_odd_window(window, n, polyorder):
+        window = int(window)
+
+        if window % 2 == 0:
+            window += 1
+
+        window = min(window, n if n % 2 == 1 else n - 1)
+
+        min_window = polyorder + 2
+        if min_window % 2 == 0:
+            min_window += 1
+
+        window = max(window, min_window)
+
+        if window > n:
+            return None
+
+        return window
+
+    def first_n_consecutive(mask, n):
+        mask = np.asarray(mask, dtype=bool)
+
+        if n <= 1:
+            idx = np.where(mask)[0]
+            return None if idx.size == 0 else int(idx[0])
+
+        count = 0
+        for i, value in enumerate(mask):
+            count = count + 1 if value else 0
+            if count >= n:
+                return i - n + 1
+
+        return None
+
+    def last_n_consecutive(mask, n):
+        mask = np.asarray(mask, dtype=bool)
+
+        count = 0
+        last_start = None
+
+        for i, value in enumerate(mask):
+            count = count + 1 if value else 0
+            if count >= n:
+                last_start = i - n + 1
+
+        return last_start
+
+    def interp_crossing(x0, y0, x1, y1, ythr):
+        if y1 == y0:
+            return x0
+
+        alpha = (ythr - y0) / (y1 - y0)
+        return x0 + alpha * (x1 - x0)
+
+    vals = getVals(
+        root_path,
+        ["Raw:WFsRaw", "Raw:t", "Raw:BLLevel"],
+    )
+
+    wfs_raw = np.asarray(vals["Raw:WFsRaw"], dtype=float)
+    t_raw = np.asarray(vals["Raw:t"], dtype=float)
+    bl_level_raw = np.asarray(vals["Raw:BLLevel"], dtype=float)
+
+    if wfs_raw.ndim != 2:
+        raise ValueError("Raw:WFsRaw debe tener forma (n_events, n_samples).")
+
+    n_events, n_raw = wfs_raw.shape
+
+    if bl_level_raw.ndim == 0:
+        bl_level_raw = np.full(n_events, float(bl_level_raw))
+
+    wfs_raw = wfs_raw - bl_level_raw[:, None]
+
+    n_interp = max(2, n_raw * interp_nsamples)
+    t = np.linspace(t_raw[0], t_raw[-1], n_interp)
+
+    signals = np.vstack([
+        np.interp(t, t_raw, row)
+        for row in wfs_raw
+    ])
+
+    n = signals.shape[1]
+    dt = float(np.nanmedian(np.diff(t)))
+
+    if not np.isfinite(dt) or dt <= 0:
+        raise ValueError("Raw:t no tiene un espaciado temporal válido.")
+
+    sg_window_eff = ensure_odd_window(sg_window, n, sg_polyorder)
+
+    if sg_window_eff is None:
+        raise ValueError("sg_window demasiado grande o incompatible con sg_polyorder.")
+
+    if baseline_nsamples is None:
+        baseline_nsamples_eff = max(5, int(baseline_fraction * n))
+    else:
+        baseline_nsamples_eff = int(baseline_nsamples)
+
+    baseline_nsamples_eff = min(max(5, baseline_nsamples_eff), n)
+
+    TLeft_sig = np.full(n_events, np.nan)
+    TRight_sig = np.full(n_events, np.nan)
+    BLLevel = np.zeros(n_events)
+
+    maxV = np.full(n_events, np.nan)
+    minV = np.full(n_events, np.nan)
+
+    for idx in range(n_events):
+        wf = signals[idx]
+
+        if not np.all(np.isfinite(wf)):
+            continue
+
+        base_region = wf[:baseline_nsamples_eff]
+
+        mu0 = np.nanmedian(base_region)
+        sigma0 = robust_sigma(base_region)
+
+        if not np.isfinite(sigma0) or sigma0 <= 0:
+            sigma0 = np.nanstd(base_region)
+
+        if not np.isfinite(sigma0) or sigma0 <= 0:
+            sigma0 = 1e-12
+
+        wf0 = wf - mu0
+        signals[idx] = wf0
+        BLLevel[idx] = mu0
+
+        y_sg = savgol_filter(
+            wf0,
+            window_length=sg_window_eff,
+            polyorder=sg_polyorder,
+            mode="interp",
+        )
+
+        dy = savgol_filter(
+            wf0,
+            window_length=sg_window_eff,
+            polyorder=sg_polyorder,
+            deriv=1,
+            delta=dt,
+            mode="interp",
+        )
+
+        max_idx = int(np.nanargmax(y_sg))
+        peak = y_sg[max_idx]
+
+        maxV[idx] = np.nanmax(wf0)
+        minV[idx] = np.nanmin(wf0)
+
+        if not np.isfinite(peak) or peak <= k_amp * sigma0:
+            TLeft_sig[idx] = t[0]
+            TRight_sig[idx] = t[-1]
+            continue
+
+        dy_base = dy[:baseline_nsamples_eff]
+
+        mu_d = np.nanmedian(dy_base)
+        sigma_d = robust_sigma(dy_base)
+
+        if not np.isfinite(sigma_d) or sigma_d <= 0:
+            sigma_d = np.nanstd(dy_base)
+
+        if not np.isfinite(sigma_d) or sigma_d <= 0:
+            sigma_d = 1e-12
+
+        amp_thr = k_amp * sigma0
+
+        # -------------------------
+        # TLeft
+        # -------------------------
+        left_y = y_sg[:max_idx + 1]
+        left_dy = dy[:max_idx + 1]
+
+        left_mask = (
+            (left_y > amp_thr) &
+            (left_dy > mu_d + k_deriv_left * sigma_d)
+        )
+
+        i_left = first_n_consecutive(left_mask, n_consecutive)
+
+        if i_left is not None:
+            if refine_with_amplitude_crossing:
+                pre = y_sg[:i_left + 1]
+                cross = np.where((pre[:-1] <= amp_thr) & (pre[1:] > amp_thr))[0]
+
+                if cross.size > 0:
+                    j = int(cross[-1])
+                    TLeft_sig[idx] = interp_crossing(
+                        t[j], y_sg[j],
+                        t[j + 1], y_sg[j + 1],
+                        amp_thr,
+                    )
+                else:
+                    TLeft_sig[idx] = t[i_left]
+            else:
+                TLeft_sig[idx] = t[i_left]
+
+        # -------------------------
+        # TRight
+        # -------------------------
+        right_y = y_sg[max_idx:]
+        right_dy = dy[max_idx:]
+
+        right_mask = (
+            (right_y > amp_thr) &
+            (right_dy < mu_d - k_deriv_right * sigma_d)
+        )
+
+        i_right_start = last_n_consecutive(right_mask, n_consecutive)
+
+        if i_right_start is not None:
+            tail_y = y_sg[max_idx + i_right_start:]
+            tail_t = t[max_idx + i_right_start:]
+
+            if refine_with_amplitude_crossing:
+                cross = np.where((tail_y[:-1] > amp_thr) & (tail_y[1:] <= amp_thr))[0]
+
+                if cross.size > 0:
+                    j = int(cross[0])
+                    TRight_sig[idx] = interp_crossing(
+                        tail_t[j], tail_y[j],
+                        tail_t[j + 1], tail_y[j + 1],
+                        amp_thr,
+                    )
+                else:
+                    TRight_sig[idx] = tail_t[-1]
+            else:
+                below = np.where(tail_y <= amp_thr)[0]
+
+                if below.size > 0:
+                    TRight_sig[idx] = tail_t[int(below[0])]
+                else:
+                    TRight_sig[idx] = tail_t[-1]
+
+        if not np.isfinite(TLeft_sig[idx]):
+            TLeft_sig[idx] = t[0]
+
+        if not np.isfinite(TRight_sig[idx]):
+            TRight_sig[idx] = t[-1]
+
+    if doUse_tRight_fromMax and np.any(np.isfinite(maxV)):
+        idx_ref = int(np.nanargmax(maxV))
+        t_right_ref = TRight_sig[idx_ref]
+
+        if np.isfinite(t_right_ref):
+            TRight_sig[:] = t_right_ref
+
+    mask = np.ones_like(signals, dtype=bool)
+
+    if not mask_ignoreLeft:
+        mask &= t[None, :] >= TLeft_sig[:, None]
+
+    if not mask_ignoreRight:
+        mask &= t[None, :] <= TRight_sig[:, None]
+
+    signals_masked = np.where(mask, signals, np.nan)
+
+    features_names = [
+        "maxV", "minV", "BLLevel", "TLeft", "TRight",
+        "signals", "signals_masked", "t", "mask",
+    ]
+
+    features_values = [
+        maxV, minV, BLLevel, TLeft_sig, TRight_sig,
+        signals, signals_masked, t, mask.astype(np.int8),
+    ]
+
+    if do_aTleft:
+        features_names.append("aTLeft")
+        features_values.append(float(np.nanmean(TLeft_sig)))
+
+    if do_aTRight:
+        features_names.append("aTRight")
+        features_values.append(float(np.nanmean(TRight_sig)))
+
+    wu_rootfile(root_path, features_names, features_values, "Signal")
+
+    return None
+
+
+
 def get_signalsROI(
     root_path: str,
     interp_nsamples: int = 5,
