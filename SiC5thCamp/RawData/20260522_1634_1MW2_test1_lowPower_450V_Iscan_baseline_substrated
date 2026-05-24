@@ -1,0 +1,20 @@
+-------------------------------------------------------------
+3DTCT version 1.0  Measurement
+SGiker Laser Facility
+-------------------------------------------------------------			
+date, time	22/05/2026	16:34	
+motor identity x,y,z	27000410, 27501472, 27501451		
+motor1 (motor scaned in first place)	27000410		
+motor2	27501451		
+motor3	27501472		
+pos inicial1	8,39223		
+pos inicial2	2,79953		
+pos inicial3	20,19989		
+delta1[mm], steps1	0,00000	100	
+delta2[mm], steps2	0,00000	1	
+delta3[mm], steps3	0,000000	1	
+timebase[s], datapoints, position 	1,000000E+2	5000	2,000000E+1
+Samples, averages	1	16	
+-------------------------------------------------------------
+relpos1, relpos2, relpos3, laser intensity, baseline substracted waveform
+-------------------------------------------------------------			

@@ -1082,6 +1082,7 @@ def correct_Signals(
     mask = np.asarray(vals["Signal:mask"]).astype(bool)
     LP = np.asarray(vals["Raw:LP"], dtype=float)
 
+
     n_events, n_samples = signals.shape
 
     def shift_waveform(y, shift_samples, fill=np.nan):
@@ -1347,8 +1348,7 @@ def correct_Signalsddd(
             "Signal",
         )
 
-
-
+ 
 
 def zscan_profileAnalisis(
     root_file: str,
@@ -1517,9 +1517,16 @@ def zscan_profileAnalisis(
     for i in range(reps):
         width[i] = 2*np.sqrt(FWHM[i]**2/4-(Rl[i])**2)
 
+    def numerical_aperture(wavelength, rayleigh_length):
+        w0 = np.sqrt(wavelength * rayleigh_length / np.pi)
+        return wavelength / (np.pi * w0)
+    
+    NA = numerical_aperture(0.4, Rl)
 
-    features_names += ["FWHM", "width"]
-    features_pars += [FWHM, width]
+    features_names += ["FWHM", "width", "NA"]
+    features_pars += [FWHM, width, NA]
+
+
 
     if show_plot:
         print(Path(root_file).stem)

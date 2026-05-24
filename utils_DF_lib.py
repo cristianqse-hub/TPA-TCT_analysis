@@ -67,6 +67,10 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str):
         return out
 
     def try_rdf_write(path, tname, values):
+        # En ficheros existentes usamos la ruta clásica en UPDATE para
+        # evitar acumulación de entradas o recreación accidental de árboles.
+        if os.path.exists(path):
+            return False
         cols = {}
         for n, p in values.items():
             if is_string_scalar(p) or is_string_vector(p):
@@ -92,14 +96,15 @@ def wu_rootfile(root_path: str, names: list, params: list, tree_name: str):
             # ROOT espera columnas con longitud consistente (aquí siempre 1 fila)
             df = ROOT.RDF.FromNumpy(cols)
             opts = ROOT.RDF.RSnapshotOptions()
-            opts.fMode = "RECREATE"
+            opts.fMode = "UPDATE" if os.path.exists(path) else "RECREATE"
             df.Snapshot(tname, path, list(cols.keys()), opts)
             return True
         except Exception:
             return False
 
     def fallback_classic_write(path, tname, values):
-        f = ROOT.TFile.Open(path, "RECREATE")
+        mode = "UPDATE" if os.path.exists(path) else "RECREATE"
+        f = ROOT.TFile.Open(path, mode)
         if not f or f.IsZombie():
             raise RuntimeError(f"No se pudo crear: {path}")
 
@@ -402,16 +407,38 @@ def getVals(root_path: str, keys: list):
         used_df = False
         try:
             rdf = ROOT.RDataFrame(tree_name, root_path)
-            data = rdf.AsNumpy(cols)
+            available_cols = {str(c) for c in rdf.GetColumnNames()}
+            read_cols = list(cols)
+            shape_cols = {}
+            for _, p in reqs:
+                shape_name = f"{p}__shape"
+                if shape_name in available_cols:
+                    shape_cols[p] = shape_name
+                    if shape_name not in read_cols:
+                        read_cols.append(shape_name)
+
+            data = rdf.AsNumpy(read_cols)
             for spec, p in reqs:
                 arr = data[p]
                 if len(arr) == 0:
                     raise ValueError(f"El TTree '{tree_name}' no tiene entradas")
                 v = arr[0]
-                if isinstance(v, (np.ndarray, list, tuple)):
-                    out[spec] = np.asarray(v)
+                cls = v.__class__.__name__ if hasattr(v, "__class__") else ""
+                if isinstance(v, (np.ndarray, list, tuple)) or "RVec" in cls or "vector" in cls:
+                    value = np.asarray(v)
                 else:
-                    out[spec] = v.item() if isinstance(v, np.generic) else v
+                    value = v.item() if isinstance(v, np.generic) else v
+
+                shape_name = shape_cols.get(p)
+                if shape_name and isinstance(value, np.ndarray):
+                    shp = np.asarray(data[shape_name][0], dtype=int)
+                    if shp.size > 1:
+                        try:
+                            value = value.reshape(tuple(shp.tolist()))
+                        except Exception:
+                            pass
+
+                out[spec] = value
             used_df = True
         except Exception:
             used_df = False
@@ -456,3 +483,104 @@ def getVals(root_path: str, keys: list):
         f.Close()
 
     return out
+
+
+def reshape_paramReps(root_path: str, param_spec: str, aux_reps=1):
+    """
+    Reshape a vector into a reps x n matrix based on Raw:reps and store R/A/E outputs.
+    """
+
+    try:
+        vals = getVals(root_path, ["Raw:reps", param_spec])
+        reps = int(vals["Raw:reps"])
+    except Exception:
+        vals = getVals(root_path, [param_spec])
+        reps = aux_reps
+
+    data = np.asarray(vals[param_spec])
+
+    if data.ndim != 1:
+        raise ValueError("El parámetro debe ser un vector 1D")
+    if reps <= 0:
+        raise ValueError("Raw:reps debe ser > 0")
+    if data.size % reps != 0:
+        raise ValueError("El tamaño del vector no es divisible por Raw:reps")
+
+    rows = reps
+    cols = data.size // reps
+    reshaped = data.reshape((rows, cols))
+    avg = reshaped.mean(axis=0)
+    std = reshaped.std(axis=0)
+
+    if ":" not in param_spec:
+        raise ValueError("param_spec debe tener formato 'tree:param'")
+    tree_name, param = param_spec.split(":", 1)
+    tree_name = tree_name.strip()
+    param = param.strip()
+    if not tree_name or not param:
+        raise ValueError("param_spec debe tener formato 'tree:param'")
+
+    features_names = [f"{param}_R", f"{param}_A", f"{param}_E"]
+    features_values = [reshaped, avg, std]
+
+    wu_rootfile(root_path, features_names, features_values, tree_name)
+
+    return {
+        "reps": reps,
+        "rows": rows,
+        "cols": cols,
+    }
+
+
+def group_analysis(files_list, output_file, parameter_treepar, output_treepar):
+    """
+    Agrupa parámetros de varios ROOT files en una sola matriz/vector.
+    """
+    if ":" not in parameter_treepar:
+        raise ValueError("parameter_treepar debe tener formato 'tree:param'")
+    if ":" not in output_treepar:
+        raise ValueError("output_treepar debe tener formato 'tree:param'")
+
+    val = getVals(files_list[0], [parameter_treepar])[parameter_treepar]
+    arr = np.asarray(val)
+    try:
+        dim_parameter = arr.shape[0] if arr.shape[0] > 1 else arr.shape[1]
+    except Exception:
+        dim_parameter = 1
+
+    shift = int(len(files_list))
+
+    values = np.zeros([int(shift * dim_parameter)])
+
+    for i, root_path in enumerate(files_list):
+        val = getVals(root_path, [parameter_treepar])[parameter_treepar]
+        arr = np.asarray(val)
+        if dim_parameter > 1:
+            for j, jval in enumerate(arr):
+                values[i + (j * shift)] = jval
+        else:
+            values[i] = val
+
+    values = np.array(values)
+    out_tree, out_param = output_treepar.split(":", 1)
+    out_tree = out_tree.strip()
+    out_param = out_param.strip()
+    wu_rootfile(output_file, [out_param], [values], out_tree)
+
+    if dim_parameter > 1:
+        reshape_paramReps(output_file, output_treepar, aux_reps=dim_parameter)
+
+
+def average_reps(y, reps):
+    y = np.asarray(y, dtype=float)
+
+    n_total = y.size
+    n_z = n_total // reps
+
+    y = y[: reps * n_z]
+    y_rep = y.reshape(reps, n_z)
+
+    y_mean = np.nanmean(y_rep, axis=0)
+    y_std = np.nanstd(y_rep, axis=0)
+
+    return y_mean, y_std, n_z
