@@ -1,0 +1,43 @@
+{
+  "refresh_interval_s": 2.0,
+  "mobility_names": [
+    "electron_mu0",
+    "electron_vsat",
+    "electron_beta",
+    "hole_mu0",
+    "hole_vsat",
+    "hole_beta"
+  ],
+  "parameter_names": [
+    "tau_e_ns",
+    "tau_h_ns",
+    "field_center",
+    "field_coeff",
+    "field_offset",
+    "electron_mu0",
+    "electron_vsat",
+    "electron_beta",
+    "hole_mu0",
+    "hole_vsat",
+    "hole_beta",
+    "K",
+    "y0",
+    "z_shift"
+  ],
+  "parameters": {
+    "tau_e_ns": 2.2518201612997,
+    "tau_h_ns": 0.10179515688648,
+    "field_center": 20.6940636339,
+    "field_coeff": 0.132077181125,
+    "field_offset": 10.0604327000842,
+    "electron_mu0": 950.0,
+    "electron_vsat": 20000000.0,
+    "electron_beta": 1.15,
+    "hole_mu0": 120.0,
+    "hole_vsat": 12000000.0,
+    "hole_beta": 1.25,
+    "K": 1.4285593212476315,
+    "y0": -0.012542896678808022,
+    "z_shift": 28.5179054976
+  }
+}

@@ -329,6 +329,65 @@ def fromDatafile_fill(
     from utils_lib import wu_rootfile  # o importa donde tengas wu_rootfile
     import numpy as np
     from pathlib import Path
+    import re
+
+    def parse_number(value):
+        return float(value.strip().replace(",", "."))
+
+    def parse_int(value):
+        return int(parse_number(value))
+
+    def split_header_line(line):
+        return [part.strip() for part in re.split(r"\t+|\s{2,}", line.strip()) if part.strip()]
+
+    def parse_datafile_header(header_lines):
+        header = {}
+
+        for line in header_lines:
+            parts = split_header_line(line)
+            if not parts:
+                continue
+
+            key = parts[0].strip().lower()
+
+            if key == "date, time" and len(parts) >= 3:
+                header["date"] = parts[1]
+                header["time"] = parts[2]
+
+            elif key.startswith("motor1") and len(parts) >= 2:
+                header["motor_identity1"] = parts[1]
+            elif key.startswith("motor2") and len(parts) >= 2:
+                header["motor_identity2"] = parts[1]
+            elif key.startswith("motor3") and len(parts) >= 2:
+                header["motor_identity3"] = parts[1]
+
+            elif key.startswith("pos inicial1") and len(parts) >= 2:
+                header["pos0_1"] = parse_number(parts[1])
+            elif key.startswith("pos inicial2") and len(parts) >= 2:
+                header["pos0_2"] = parse_number(parts[1])
+            elif key.startswith("pos inicial3") and len(parts) >= 2:
+                header["pos0_3"] = parse_number(parts[1])
+
+            elif key.startswith("delta1") and len(parts) >= 3:
+                header["delta1"] = parse_number(parts[1])
+                header["steps1"] = parse_int(parts[2])
+            elif key.startswith("delta2") and len(parts) >= 3:
+                header["delta2"] = parse_number(parts[1])
+                header["steps2"] = parse_int(parts[2])
+            elif key.startswith("delta3") and len(parts) >= 3:
+                header["delta3"] = parse_number(parts[1])
+                header["steps3"] = parse_int(parts[2])
+
+            elif key.startswith("timebase") and len(parts) >= 4:
+                header["timebase"] = parse_number(parts[1])
+                header["datapoints"] = parse_int(parts[2])
+                header["position"] = parse_number(parts[3])
+
+            elif key == "samples, averages" and len(parts) >= 3:
+                header["samples"] = parse_int(parts[1])
+                header["averages"] = parse_int(parts[2])
+
+        return header
 
     root_dir = Path(root_dir)
     raw_dir = Path(raw_dir)
@@ -349,8 +408,10 @@ def fromDatafile_fill(
             scan_type = ""
 
             for t in tokens:
-                if t.endswith("v") and t[:-1].isdigit():
-                    voltage_v = int(t[:-1])
+                voltage_match = re.fullmatch(r"([-+]?\d+(?:\.\d+)?)v", t)
+                if voltage_match:
+                    voltage_value = float(voltage_match.group(1))
+                    voltage_v = int(voltage_value) if voltage_value.is_integer() else voltage_value
 
                 if t.endswith("nm") and t[:-2].isdigit():
                     wavelength_nm = int(t[:-2])
@@ -367,6 +428,7 @@ def fromDatafile_fill(
 
             # --- leer datafile (saltando 4 separadores de guiones) ---
             dash_count = 0
+            header_lines = []
             data_lines = []
 
             with open(raw_path, "r", encoding="utf-8", errors="replace") as f:
@@ -376,12 +438,18 @@ def fromDatafile_fill(
                         dash_count += 1
                         continue
 
+                    if dash_count < 4:
+                        header_lines.append(line.rstrip("\r\n"))
+                        continue
+
                     if dash_count >= 4:
                         if s:
                             data_lines.append(s.replace(",", "."))
 
             if not data_lines:
                 raise ValueError(f"No se encontraron datos en {raw_path}")
+
+            header_params = parse_datafile_header(header_lines)
 
             data = np.loadtxt(data_lines, delimiter="\t")
             if data.ndim == 1:
@@ -406,6 +474,7 @@ def fromDatafile_fill(
                 "rootPath",
                 "do_flipZ",
                 "do_invertSignal",
+                *header_params.keys(),
                 "z",
                 "x",
                 "y",
@@ -424,6 +493,7 @@ def fromDatafile_fill(
                 str(root_path),
                 bool(do_flipZ),
                 bool(do_invertSignal),
+                *header_params.values(),
                 z.astype(np.float64, copy=False),
                 x.astype(np.float64, copy=False),
                 y.astype(np.float64, copy=False),
