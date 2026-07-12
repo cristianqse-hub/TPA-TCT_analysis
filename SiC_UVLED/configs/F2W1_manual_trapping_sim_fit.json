@@ -1,0 +1,20 @@
+{
+  "description": "Manual F2W1 trapping-simulation parameters. Edit profile_index to choose the F2W1 profile ordered by increasing relative LED power.",
+  "parameters": {
+    "electron_beta": 1.15,
+    "electron_vsat": 1.47e2,
+    "field_center": 30.701266,
+    "field_coeff_mu0": 3.5903169,
+    "field_offset": 0.32509717,
+    "hole_beta": 1.237535,
+    "hole_m2u0_factor": 0.16666666666666666,
+    "hole_vsat": 11844840.0,
+    "intensity_scale": 1.0,
+    "tau_e_ns": 1.0941983,
+    "tau_h_ns": 0.10078204455,
+    "y0": 0.02,
+    "z_shift": 3.0
+  },
+  "profile_index": 4,
+  "steps_per_active_region": 400
+}

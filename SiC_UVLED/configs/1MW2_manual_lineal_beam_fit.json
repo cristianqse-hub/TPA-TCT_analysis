@@ -1,0 +1,15 @@
+{
+  "description": "Manual 1MW2 lineal beam model parameters. The quadratic beam term b is fixed to 0.",
+  "parameters": {
+    "A_area": 9.106901819568089,
+    "K": 1.9048051801350496,
+    "a": 0.004461681253026355,
+    "y0": -0.031227930105467934,
+    "z0_ab_frac": 0.3016999164441918,
+    "z0_step": -2.561761988852449,
+    "z2": 50.337266961172645,
+    "zR0": 4.385374879802671
+  },
+  "refresh_interval_s": 2.0,
+  "root_index": 0
+}

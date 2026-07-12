@@ -8,8 +8,12 @@ Created on Fri Nov 25 11:00:20 2022
 
 
 import numpy as np
-import plotly.graph_objects as go
-import plotly.colors
+try:
+    import plotly.graph_objects as go
+    import plotly.colors
+except ModuleNotFoundError:
+    go = None
+    plotly = None
 from PIL import ImageColor
 import ROOT
 from ROOT import gStyle, gPad
@@ -519,7 +523,6 @@ def plot_Fit(cl, Plot, fitFcn="pol1", mrange = [0,0], plotBox = [0,0,0,0,1]):
         stats.SetY1NDC(plotBox[1])
         stats.SetY2NDC(plotBox[1]-plotBox[3])
     return fit
-
 
 
 

@@ -1,0 +1,31 @@
+{
+  "description": "F2W1 rel-power 0 lineal-field fit parameters. Direct least-squares residuals; lineal electric field clipped at zero and rescaled to applied bias.",
+  "metadata": {
+    "data_fwhm": 26.075992848556304,
+    "data_peak": 0.5556613263531368,
+    "fit_fwhm": 29.131174878546016,
+    "fit_peak": 0.5266542076263092,
+    "fit_source": "fit",
+    "norm_scale": 298.67889472523706,
+    "r2": 0.9940253505607892,
+    "rmse": 0.013193034696793856,
+    "root_file": "SiC_UVLED/RootFiles/20240704_1249_F2W1_-850V_1mm beam_400nm_LED_0_reps3_zscan_baseline_substrated.root"
+  },
+  "parameters": {
+    "beam_width_scale": 1.0,
+    "electron_beta": 1.1500965108667693,
+    "electron_mu0": 950.0231115124747,
+    "electron_vsat": 19999775.80086712,
+    "field_slope": -0.06353509659678612,
+    "field_z0_value": 2.573171537994288,
+    "hole_beta": 1.2502079889374755,
+    "hole_mu0": 119.99176109978578,
+    "hole_vsat": 12009759.527642306,
+    "intensity_scale": 1.0247351234303823,
+    "tau_e_ns": 3.8818598682435956,
+    "tau_h_ns": 0.02491294464179347,
+    "y0": -0.004820768010269471,
+    "z_shift": 2.0489030685304463
+  },
+  "refresh_interval_s": 2.0
+}

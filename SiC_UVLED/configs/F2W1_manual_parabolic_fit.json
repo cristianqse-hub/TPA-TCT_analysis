@@ -1,0 +1,22 @@
+{
+  "description": "Manual F2W1 parabolic-field model parameters. Edit profile_index to choose the F2W1 profile ordered by increasing relative LED power.",
+  "profile_index": 0,
+  "refresh_interval_s": 2.0,
+  "parameters": {
+    "beam_width_scale": 1.3965,
+    "electron_beta": 1.1360952,
+    "electron_mu0": 944.56887,
+    "electron_vsat": 19705848.0,
+    "field_center": 33.701266,
+    "field_coeff": 2.5903169,
+    "field_offset": 0.32509717,
+    "hole_beta": 1.237535,
+    "hole_mu0": 119.52693,
+    "hole_vsat": 11844840.0,
+    "intensity_scale": 1.3653818,
+    "tau_e_ns": 3.0941983,
+    "tau_h_ns": 0.00078204455,
+    "y0": -0.0056622198,
+    "z_shift": 3.0261968
+  }
+}

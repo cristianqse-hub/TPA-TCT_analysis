@@ -1,0 +1,21 @@
+{
+  "description": "Manual F2W1 lineal-field model parameters. Edit profile_index to choose the F2W1 profile ordered by increasing relative LED power.",
+  "profile_index": 0,
+  "refresh_interval_s": 2.0,
+  "parameters": {
+    "beam_width_scale": 1.0,
+    "electron_beta": 1.1500965108667693,
+    "electron_mu0": 950.0231115124747,
+    "electron_vsat": 19999775.80086712,
+    "field_slope": -0.07053509659678612,
+    "field_z0_value": 2.573171537994288,
+    "hole_beta": 1.2502079889374755,
+    "hole_mu0": 119.99176109978578,
+    "hole_vsat": 12009759.527642306,
+    "intensity_scale": 1.0247351234303823,
+    "tau_e_ns": 1.8818598682435956,
+    "tau_h_ns": 0.042491294464179347,
+    "y0": -0.004820768010269471,
+    "z_shift": 2.5489030685304463
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "attempts": [],
+  "description": "All lineal-field multistart fit attempts and their evaluation histories.",
+  "goodness_metric": "chi2_dof"
+}

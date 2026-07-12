@@ -1,0 +1,33 @@
+{
+  "description": "Independent F2W1 profile fit with direct least-squares residuals and multi-start initialization.",
+  "metadata": {
+    "best_start": 22,
+    "cost": 0.043433824047364795,
+    "fit_order_index": 3,
+    "led_bias": 3.0,
+    "message": "`xtol` termination condition is satisfied.",
+    "nfev": 23,
+    "norm_scale": 298.67889472523706,
+    "optimality": 0.22884365789586075,
+    "power_mw": 0.234,
+    "rel_power": 0.09,
+    "residual": "model - data, no weights",
+    "root_file": "SiC_UVLED/RootFiles/20240704_1256_F2W1_-850V_1mm beam_400nm_LED_3.0_reps3_zscan_baseline_substrated.root"
+  },
+  "parameters": {
+    "beam_width_scale": 1.3964999999999999,
+    "electron_beta": 1.0937599783928198,
+    "electron_mu0": 905.3515381784649,
+    "electron_vsat": 19038421.135023933,
+    "field_slope": -0.3359994762816118,
+    "field_z0_value": 59.341614800539816,
+    "hole_beta": 1.3380984894255823,
+    "hole_mu0": 128.04282732567782,
+    "hole_vsat": 12858173.963924306,
+    "intensity_scale": 0.9531398102014421,
+    "tau_e_ns": 202.10147048668313,
+    "tau_h_ns": 0.00839557773262415,
+    "y0": -0.014218299103879208,
+    "z_shift": 1.7778593238202736
+  }
+}

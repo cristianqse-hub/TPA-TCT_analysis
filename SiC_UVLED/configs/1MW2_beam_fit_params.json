@@ -1,0 +1,34 @@
+{
+  "metadata": {
+    "fit_message": "`xtol` termination condition is satisfied.",
+    "fit_multistart": false,
+    "fit_source": "fit",
+    "fit_success": true,
+    "note": "1MW2 SiC_UVLED beam fit parameters",
+    "raw_norm_scale": 298.67889472523706,
+    "root_file": "SiC_UVLED/RootFiles/20240704_1811_1MW2_-1000V_1mm beam_400nm_LED_0_lamp_off_reps2_zscan_baseline_substrated.root"
+  },
+  "parameters": {
+    "A_area": 9.106901819568089,
+    "K": 1.9048051801350496,
+    "a": 0.004461681253026355,
+    "b": 0.0017325631823942112,
+    "fit_cost": 0.0011075885089087741,
+    "fit_max_norm": 0.9947325228880607,
+    "fit_nfev": 34.0,
+    "r2": 0.9997086690346676,
+    "rising_K": 1.1592638279248169,
+    "rising_points": 10.0,
+    "rising_y0": -0.056119818924433566,
+    "rising_z0_step": -2.561761988852449,
+    "rising_zR0": 4.4251783494668535,
+    "rmse": 0.006656090470865834,
+    "y0": -0.031227930105467934,
+    "z0_ab": 12.624987247362315,
+    "z0_ab_frac": 0.3016999164441918,
+    "z0_step": -2.561761988852449,
+    "z2": 50.337266961172645,
+    "z2_end": 47.7755049723202,
+    "zR0": 4.385374879802671
+  }
+}

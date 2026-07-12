@@ -1,0 +1,5 @@
+{
+  "accepted_fits": [],
+  "description": "Accepted lineal-field multistart trapping-model fits, stored in completion order.",
+  "goodness_metric": "chi2_dof"
+}

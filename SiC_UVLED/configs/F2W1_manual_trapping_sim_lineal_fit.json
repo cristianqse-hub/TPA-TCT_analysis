@@ -1,0 +1,15 @@
+{
+  "description": "Manual F2W1 lineal-field trapping-simulation parameters. Edit profile_index to choose the F2W1 profile ordered by increasing relative LED power.",
+  "parameters": {
+    "field_end": 50.337266961172645,
+    "field_slope": -0.07053509659678613,
+    "intensity_scale": 1.0,
+    "tau_e_ns": 3.0941983,
+    "tau_h_ns": 1.00078204455,
+    "y0": 0.0,
+    "z_shift": 0.0
+  },
+  "profile_index": 0,
+  "refresh_interval_s": 2.0,
+  "steps_per_active_region": 400
+}

@@ -1,0 +1,109 @@
+F2W1 rel-power 0 profile
+  root: SiC_UVLED/RootFiles/20240704_1249_F2W1_-850V_1mm beam_400nm_LED_0_reps3_zscan_baseline_substrated.root
+  normalized by max 1MW2: 298.67889472523706
+  voltage [V]: 850.0
+  z0 initial from 50% left rise [um]: -0.7422171541497433
+  z_shift initial [um]: 1.8195448347027057
+  p0 source: SiC_UVLED/configs/F2W1_rel0_manual_trap_field_params.json
+  residual: direct least-squares model - data, no weights
+  data peak/FWHM: 0.5556613263531368 26.075992848556304
+  z_shift fit bounds [um]: (-31.880455165297295, 38.11954483470271)
+  multistart candidates: 67
+    start 00: cost=0.0016240873, nfev=46, optimality=0.002
+    start 01: cost=0.063955125, nfev=52, optimality=1.16e+06
+    start 02: cost=0.017466622, nfev=104, optimality=0.00329
+    start 03: cost=0.002511229, nfev=68, optimality=0.264
+    start 04: cost=0.0020034771, nfev=62, optimality=0.000594
+    start 05: cost=0.0028935248, nfev=212, optimality=0.00615
+    start 06: cost=0.0045983332, nfev=88, optimality=0.023
+    start 07: cost=0.0040985007, nfev=49, optimality=0.0199
+    start 08: cost=0.0022325864, nfev=48, optimality=0.106
+    start 09: cost=0.0009094957, nfev=69, optimality=0.138
+    start 10: cost=0.00076467501, nfev=73, optimality=0.00148
+    start 11: cost=0.0024427791, nfev=47, optimality=0.0582
+    start 12: cost=0.0016526178, nfev=47, optimality=0.0863
+    start 13: cost=0.0016228352, nfev=55, optimality=0.00264
+    start 14: cost=0.00091401185, nfev=58, optimality=0.81
+    start 15: cost=0.0058783667, nfev=74, optimality=0.00571
+    start 16: cost=0.0012468919, nfev=66, optimality=0.0104
+    start 17: cost=0.0017206517, nfev=69, optimality=0.0455
+    start 18: cost=0.034772573, nfev=45, optimality=2.43e+06
+    start 19: cost=0.0014795514, nfev=54, optimality=0.112
+    start 20: cost=0.0011677353, nfev=59, optimality=1.51
+    start 21: cost=0.001624252, nfev=53, optimality=0.00119
+    start 22: cost=0.0016243007, nfev=53, optimality=0.0012
+    start 23: cost=0.00091213812, nfev=56, optimality=0.691
+    start 24: cost=0.00091212836, nfev=55, optimality=0.541
+    start 25: cost=0.0016240953, nfev=59, optimality=0.00181
+    start 26: cost=0.00091208378, nfev=59, optimality=0.592
+    start 27: cost=0.00090903378, nfev=53, optimality=0.128
+    start 28: cost=0.00091210469, nfev=56, optimality=3.45
+    start 29: cost=0.00091626749, nfev=78, optimality=0.0045
+    start 30: cost=0.0014339649, nfev=60, optimality=0.059
+    start 31: cost=0.00084808055, nfev=57, optimality=0.0091
+    start 32: cost=0.0012631395, nfev=58, optimality=0.0442
+    start 33: cost=0.00092866297, nfev=68, optimality=2.33
+    start 34: cost=0.0011008641, nfev=63, optimality=1.17
+    start 35: cost=0.20598286, nfev=43, optimality=1.04e+06
+    start 36: cost=0.13599119, nfev=35, optimality=7.42e+05
+    start 37: cost=1.1066966, nfev=43, optimality=7.88e+05
+    start 38: cost=0.074765449, nfev=47, optimality=9.74e+03
+    start 39: cost=0.077157296, nfev=56, optimality=0.0139
+    start 40: cost=0.088468341, nfev=64, optimality=0.151
+    start 41: cost=0.088112449, nfev=51, optimality=0.0831
+    start 42: cost=0.058881126, nfev=45, optimality=2.55e+03
+    start 43: cost=0.13488245, nfev=41, optimality=9.31e+05
+    start 44: cost=0.089878831, nfev=55, optimality=0.0845
+    start 45: cost=0.069587791, nfev=48, optimality=0.00438
+    start 46: cost=0.051640248, nfev=44, optimality=7.58e+05
+    start 47: cost=0.051311857, nfev=67, optimality=7.32e+03
+    start 48: cost=0.21787478, nfev=39, optimality=0.21
+    start 49: cost=0.32632876, nfev=173, optimality=1.49e+06
+    start 50: cost=0.071477673, nfev=48, optimality=0.0202
+    start 51: cost=0.076542139, nfev=40, optimality=6.55e+05
+    start 52: cost=0.087679943, nfev=52, optimality=99.1
+    start 53: cost=0.15918365, nfev=59, optimality=7.32e+05
+    start 54: cost=0.13802436, nfev=47, optimality=7.45e+05
+    start 55: cost=0.027629823, nfev=521, optimality=6.84e-07
+    start 56: cost=0.051424241, nfev=51, optimality=1.4e+06
+    start 57: cost=0.13069717, nfev=47, optimality=6.63e+05
+    start 58: cost=0.057671971, nfev=58, optimality=0.00372
+    start 59: cost=1.3727394, nfev=38, optimality=4.33e+05
+    start 60: cost=0.13309585, nfev=51, optimality=0.0751
+    start 61: cost=0.19799674, nfev=46, optimality=9.91e+05
+    start 62: cost=0.13430782, nfev=38, optimality=8.18e+05
+    start 63: cost=0.088225074, nfev=42, optimality=0.0887
+    start 64: cost=0.069693093, nfev=45, optimality=2.9e+06
+    start 65: cost=0.1576483, nfev=52, optimality=1.09e+06
+    start 66: cost=0.030334012, nfev=50, optimality=4.39e+06
+  best multistart index: 10 cost: 0.0007646750053269573
+`xtol` termination condition is satisfied.
+Function evaluations 19, initial cost 7.6468e-04, final cost 7.6468e-04, first-order optimality 1.48e-03.
+
+========== F2W1 rel-power 0 fit ==========
+source: fit
+       tau_e_ns = 3.0941983
+       tau_h_ns = 0.00078204455
+   field_center = 33.701266
+    field_coeff = 2.5903169
+   field_offset = 0.32509717
+intensity_scale = 1.3653818
+beam_width_scale = 1.3965
+   electron_mu0 = 944.56887
+  electron_vsat = 19705848
+  electron_beta = 1.1360952
+       hole_mu0 = 119.52693
+      hole_vsat = 11844840
+      hole_beta = 1.237535
+             y0 = -0.0056622198
+        z_shift = 3.0261968
+intensity_scale = 1.3653818
+          K_eff = 2.6145584 (K_1MW2 fixed x intensity_scale)
+Data peak/FWHM: 0.5556613263531368 26.075992848556304
+Fit  peak/FWHM: 0.5556048162155043 26.231426391207158
+RMSE: 0.0055305515288331135
+R2: 0.9989500710636487
+optimizer message: `xtol` termination condition is satisfied.
+optimizer nfev: 19
+optimizer optimality: 0.0014761508058336193
+optimizer tolerances: {'ftol': 1e-14, 'xtol': 1e-14, 'gtol': 1e-12, 'max_nfev': 10000}
