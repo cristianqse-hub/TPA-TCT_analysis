@@ -1,0 +1,895 @@
+{
+  "base_configuration": {
+    "fit_options": {
+      "constraint_range_sigmas": 10.0,
+      "do_useMINOS": false,
+      "minimizer_algorithm": "Minimize",
+      "minimizer_type": "Minuit2",
+      "n_z_grid": 20001,
+      "params_MINOS": [],
+      "print_level": -1,
+      "rangeType_percetual": false,
+      "refit_fromLocalMinimumMINOS": false,
+      "relative_sigma_floor_fraction": 1e-06,
+      "relative_sigma_fraction": 0.02,
+      "show_roofit_output": false,
+      "steps_per_active_region": 400,
+      "strategy": 1,
+      "table_sigfigs": 4
+    },
+    "parameters": {
+      "BM_CoefA": {
+        "type": "fixed",
+        "value": 0.004461681253026355
+      },
+      "BM_CoefB": {
+        "type": "fixed",
+        "value": 0.0017325631823942112
+      },
+      "BM_area": {
+        "type": "fixed",
+        "value": 9.106901819568089
+      },
+      "BM_scaleAmp": {
+        "type": "fixed",
+        "value": 1.9048051801350496
+      },
+      "BM_scaleOffset": {
+        "type": "fixed",
+        "value": -0.031227930105467934
+      },
+      "BM_z0": {
+        "type": "fixed",
+        "value": -2.561761988852449
+      },
+      "BM_zR0": {
+        "type": "fixed",
+        "value": 4.385374879802671
+      },
+      "BM_zRight": {
+        "type": "fixed",
+        "value": 50.337266961172645
+      },
+      "BM_z_Aberr": {
+        "type": "fixed",
+        "value": 12.624987247362315
+      },
+      "EF_BiasVoltage": {
+        "enabled": true,
+        "type": "fixed",
+        "value": 850.0
+      },
+      "EF_CoefA": {
+        "max": 0.1,
+        "min": -0.1,
+        "type": "fit",
+        "value": 0.01
+      },
+      "EF_CoefB": {
+        "max": 0.5,
+        "min": -0.5,
+        "type": "fit",
+        "value": -0.01
+      },
+      "EF_CoefC": {
+        "type": "fixed",
+        "value": 0.0
+      },
+      "EF_z0": {
+        "type": "fixed",
+        "value": 40.0
+      },
+      "MV_beta_e": {
+        "type": "fit",
+        "value": 0.96
+      },
+      "MV_beta_h": {
+        "type": "fit",
+        "value": 1.02
+      },
+      "MV_mu0_e": {
+        "type": "fit",
+        "value": 95.0
+      },
+      "MV_mu0_h": {
+        "type": "fit",
+        "value": 11.5
+      },
+      "MV_vsat_e": {
+        "type": "fit",
+        "value": 147.0
+      },
+      "MV_vsat_h": {
+        "type": "fit",
+        "value": 69.0
+      },
+      "SC_scaleAmp": {
+        "max": 3.0,
+        "min": 0.9,
+        "type": "fit",
+        "value": 1.0
+      },
+      "SC_scaleOffset": {
+        "type": "fit",
+        "value": -0.027397185987337154
+      },
+      "SC_scale_zShift": {
+        "max": 3.0,
+        "min": -3.0,
+        "type": "fit",
+        "value": 0.0
+      },
+      "TR_tau_e": {
+        "max": 5.0,
+        "min": 0.001,
+        "type": "fit",
+        "value": 1.0
+      },
+      "TR_tau_h": {
+        "max": 1.0,
+        "min": 0.001,
+        "type": "fit",
+        "value": 0.1
+      }
+    }
+  },
+  "include_constrained": false,
+  "n_cases_completed": 5,
+  "n_cases_requested": 200,
+  "output_dir": "SiC_UVLED/Fits_RooFit/MultiFits_randomInitial_profile04",
+  "profile_index": 4,
+  "records": [
+    {
+      "case_index": 0,
+      "chi2": null,
+      "chi2_dof": null,
+      "dof": 37,
+      "final_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 849.9999999999998,
+        "EF_CoefA": -0.05861961617044931,
+        "EF_CoefB": 0.4529382126830378,
+        "EF_CoefC": 48.87604343627872,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 0.9239843842864459,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": 0.16440242285153195,
+        "TR_tau_e": 0.3310198927999778,
+        "TR_tau_h": 0.20391295913706428,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "fit_name": "multifit_profile_04_randomInitial_0000",
+      "generation_id": "20260713101455_47_multifit_profile_04_randomInitial_0000",
+      "hesse_errors": {
+        "EF_CoefA": 0.0,
+        "EF_CoefB": 0.0,
+        "MV_beta_e": null,
+        "MV_beta_h": null,
+        "MV_mu0_e": null,
+        "MV_mu0_h": null,
+        "MV_vsat_e": null,
+        "MV_vsat_h": null,
+        "SC_scaleAmp": 0.0,
+        "SC_scaleOffset": null,
+        "SC_scale_zShift": 0.0,
+        "TR_tau_e": 0.0,
+        "TR_tau_h": 0.0
+      },
+      "initial_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": -0.05861961617044931,
+        "EF_CoefB": 0.4529382126830378,
+        "EF_CoefC": 0.0,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 0.9239843842864459,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": 0.16440242285153195,
+        "TR_tau_e": 0.3310198927999778,
+        "TR_tau_h": 0.2039129591370643,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "minimize_status": 5,
+      "minos_errors": {
+        "EF_CoefA": {
+          "minus": null,
+          "plus": null
+        },
+        "EF_CoefB": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_h": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleAmp": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleOffset": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scale_zShift": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_e": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_h": {
+          "minus": null,
+          "plus": null
+        }
+      },
+      "minos_status": null,
+      "nll": 1e+100,
+      "randomized_parameters": [
+        "EF_CoefA",
+        "EF_CoefB",
+        "SC_scaleAmp",
+        "TR_tau_e",
+        "TR_tau_h",
+        "SC_scale_zShift"
+      ],
+      "timings": {
+        "minimize_elapsed_s": 0.005331425985787064,
+        "minos_elapsed_by_parameter_s": {},
+        "minos_elapsed_s": null,
+        "total_elapsed_s": 0.0123183160321787
+      }
+    },
+    {
+      "case_index": 1,
+      "chi2": 1187466.7255255906,
+      "chi2_dof": 32093.69528447542,
+      "dof": 37,
+      "final_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0000000000001,
+        "EF_CoefA": -0.020327776504441553,
+        "EF_CoefB": -0.2772755374326621,
+        "EF_CoefC": 21.53749041201003,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.17944918711749933,
+        "MV_beta_h": 0.983692147672225,
+        "MV_mu0_e": 64.04951280065376,
+        "MV_mu0_h": 32.92519762604376,
+        "MV_vsat_e": 286.8993513193179,
+        "MV_vsat_h": 220.21206651464797,
+        "SC_scaleAmp": 1.8787614116156874,
+        "SC_scaleOffset": -0.011220058973199628,
+        "SC_scale_zShift": -0.8223407217125324,
+        "TR_tau_e": 2.9395055503657326,
+        "TR_tau_h": 0.6095612837184903,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "fit_name": "multifit_profile_04_randomInitial_0001",
+      "generation_id": "20260713101554_52_multifit_profile_04_randomInitial_0001",
+      "hesse_errors": {
+        "EF_CoefA": 2.0776752084929184e-07,
+        "EF_CoefB": 1.7904363565079962e-06,
+        "MV_beta_e": 0.00011278110431820268,
+        "MV_beta_h": 0.0012455244994261446,
+        "MV_mu0_e": 0.33551676161793953,
+        "MV_mu0_h": 0.01942164183852116,
+        "MV_vsat_e": 1.4065982150314718,
+        "MV_vsat_h": 0.08580260061720159,
+        "SC_scaleAmp": 0.001267854229775267,
+        "SC_scaleOffset": 4.9947989911688165e-06,
+        "SC_scale_zShift": 0.011449107980518791,
+        "TR_tau_e": 0.008766828450342157,
+        "TR_tau_h": 0.0020634082099227347
+      },
+      "initial_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": -0.0071148851659071505,
+        "EF_CoefB": -0.2760715224820558,
+        "EF_CoefC": 0.0,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 2.936938422764072,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": -2.5454304086827637,
+        "TR_tau_e": 3.7015289019836626,
+        "TR_tau_h": 0.4674518480319602,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "minimize_status": -1,
+      "minos_errors": {
+        "EF_CoefA": {
+          "minus": null,
+          "plus": null
+        },
+        "EF_CoefB": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_h": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleAmp": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleOffset": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scale_zShift": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_e": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_h": {
+          "minus": null,
+          "plus": null
+        }
+      },
+      "minos_status": null,
+      "nll": 593419.8506521676,
+      "randomized_parameters": [
+        "EF_CoefA",
+        "EF_CoefB",
+        "SC_scaleAmp",
+        "TR_tau_e",
+        "TR_tau_h",
+        "SC_scale_zShift"
+      ],
+      "timings": {
+        "minimize_elapsed_s": 57.42799981997814,
+        "minos_elapsed_by_parameter_s": {},
+        "minos_elapsed_s": null,
+        "total_elapsed_s": 57.45471451099729
+      }
+    },
+    {
+      "case_index": 2,
+      "chi2": null,
+      "chi2_dof": null,
+      "dof": 37,
+      "final_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": -0.041153372684086434,
+        "EF_CoefB": 0.4657808928425732,
+        "EF_CoefC": 41.53642207855598,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 2.805441931836737,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": -1.2850849023207156,
+        "TR_tau_e": 0.5657002791246094,
+        "TR_tau_h": 0.5284450601979767,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "fit_name": "multifit_profile_04_randomInitial_0002",
+      "generation_id": "20260713101556_70_multifit_profile_04_randomInitial_0002",
+      "hesse_errors": {
+        "EF_CoefA": 0.0,
+        "EF_CoefB": 0.0,
+        "MV_beta_e": null,
+        "MV_beta_h": null,
+        "MV_mu0_e": null,
+        "MV_mu0_h": null,
+        "MV_vsat_e": null,
+        "MV_vsat_h": null,
+        "SC_scaleAmp": 0.0,
+        "SC_scaleOffset": null,
+        "SC_scale_zShift": 0.0,
+        "TR_tau_e": 0.0,
+        "TR_tau_h": 0.0
+      },
+      "initial_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": -0.041153372684086434,
+        "EF_CoefB": 0.4657808928425732,
+        "EF_CoefC": 0.0,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 2.805441931836737,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": -1.2850849023207156,
+        "TR_tau_e": 0.5657002791246094,
+        "TR_tau_h": 0.5284450601979767,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "minimize_status": 5,
+      "minos_errors": {
+        "EF_CoefA": {
+          "minus": null,
+          "plus": null
+        },
+        "EF_CoefB": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_h": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleAmp": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleOffset": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scale_zShift": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_e": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_h": {
+          "minus": null,
+          "plus": null
+        }
+      },
+      "minos_status": null,
+      "nll": 1e+100,
+      "randomized_parameters": [
+        "EF_CoefA",
+        "EF_CoefB",
+        "SC_scaleAmp",
+        "TR_tau_e",
+        "TR_tau_h",
+        "SC_scale_zShift"
+      ],
+      "timings": {
+        "minimize_elapsed_s": 0.09470960299950093,
+        "minos_elapsed_by_parameter_s": {},
+        "minos_elapsed_s": null,
+        "total_elapsed_s": 0.1010104069719091
+      }
+    },
+    {
+      "case_index": 3,
+      "chi2": 8593003.274127578,
+      "chi2_dof": 232243.3317331778,
+      "dof": 37,
+      "final_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": 0.024137789671747997,
+        "EF_CoefB": -0.06436131701799352,
+        "EF_CoefC": 5.525179713758579,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 2.939572919402005,
+        "SC_scaleOffset": -0.017397185987337152,
+        "SC_scale_zShift": 2.0952554356035202,
+        "TR_tau_e": 1.218808963552126,
+        "TR_tau_h": 0.10377427107215635,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "fit_name": "multifit_profile_04_randomInitial_0003",
+      "generation_id": "20260713101836_51_multifit_profile_04_randomInitial_0003",
+      "hesse_errors": {
+        "EF_CoefA": 6.91077077959179e-08,
+        "EF_CoefB": 1.6956012908603268e-06,
+        "MV_beta_e": 3.1451137954238794e-06,
+        "MV_beta_h": 3.1421108381705904e-06,
+        "MV_mu0_e": 0.000692515279300683,
+        "MV_mu0_h": 4.631212699802479e-05,
+        "MV_vsat_e": 0.00043945860781308843,
+        "MV_vsat_h": 0.0002515520224150614,
+        "SC_scaleAmp": 6.145016133718428e-07,
+        "SC_scaleOffset": 3.1421108381705883e-06,
+        "SC_scale_zShift": 1.0807854517569382e-05,
+        "TR_tau_e": 3.746134692672598e-06,
+        "TR_tau_h": 7.784807463800947e-07
+      },
+      "initial_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": 0.024137789671747997,
+        "EF_CoefB": -0.06436131701799352,
+        "EF_CoefC": 0.0,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 0.9473114883654055,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": 2.0952554356035202,
+        "TR_tau_e": 1.218808963552126,
+        "TR_tau_h": 0.10377427107215637,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "minimize_status": -1,
+      "minos_errors": {
+        "EF_CoefA": {
+          "minus": null,
+          "plus": null
+        },
+        "EF_CoefB": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_h": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleAmp": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleOffset": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scale_zShift": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_e": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_h": {
+          "minus": null,
+          "plus": null
+        }
+      },
+      "minos_status": null,
+      "nll": 4296188.124953161,
+      "randomized_parameters": [
+        "EF_CoefA",
+        "EF_CoefB",
+        "SC_scaleAmp",
+        "TR_tau_e",
+        "TR_tau_h",
+        "SC_scale_zShift"
+      ],
+      "timings": {
+        "minimize_elapsed_s": 158.83075113297673,
+        "minos_elapsed_by_parameter_s": {},
+        "minos_elapsed_s": null,
+        "total_elapsed_s": 158.88007494603517
+      }
+    },
+    {
+      "case_index": 4,
+      "chi2": null,
+      "chi2_dof": null,
+      "dof": 37,
+      "final_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": 0.031615361209992476,
+        "EF_CoefB": -0.39763440302132846,
+        "EF_CoefC": -2.641467178957225,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 2.458546110815137,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": 1.3197937642685735,
+        "TR_tau_e": 4.301199745857597,
+        "TR_tau_h": 0.3194565552705213,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "fit_name": "multifit_profile_04_randomInitial_0004",
+      "generation_id": "20260713101838_67_multifit_profile_04_randomInitial_0004",
+      "hesse_errors": {
+        "EF_CoefA": 0.0,
+        "EF_CoefB": 0.0,
+        "MV_beta_e": null,
+        "MV_beta_h": null,
+        "MV_mu0_e": null,
+        "MV_mu0_h": null,
+        "MV_vsat_e": null,
+        "MV_vsat_h": null,
+        "SC_scaleAmp": 0.0,
+        "SC_scaleOffset": null,
+        "SC_scale_zShift": 0.0,
+        "TR_tau_e": 0.0,
+        "TR_tau_h": 0.0
+      },
+      "initial_parameters": {
+        "BM_CoefA": 0.004461681253026355,
+        "BM_CoefB": 0.0017325631823942112,
+        "BM_area": 9.106901819568089,
+        "BM_scaleAmp": 1.9048051801350496,
+        "BM_scaleOffset": -0.031227930105467934,
+        "BM_z0": -2.561761988852449,
+        "BM_zR0": 4.385374879802671,
+        "BM_zRight": 50.337266961172645,
+        "BM_z_Aberr": 12.624987247362315,
+        "EF_BiasVoltage": 850.0,
+        "EF_CoefA": 0.031615361209992476,
+        "EF_CoefB": -0.39763440302132846,
+        "EF_CoefC": 0.0,
+        "EF_z0": 40.0,
+        "MV_beta_e": 0.96,
+        "MV_beta_h": 1.02,
+        "MV_mu0_e": 95.0,
+        "MV_mu0_h": 11.5,
+        "MV_vsat_e": 147.0,
+        "MV_vsat_h": 69.0,
+        "SC_scaleAmp": 2.458546110815137,
+        "SC_scaleOffset": -0.027397185987337154,
+        "SC_scale_zShift": 1.3197937642685735,
+        "TR_tau_e": 4.301199745857597,
+        "TR_tau_h": 0.3194565552705213,
+        "_EF_BiasVoltage_enabled": true
+      },
+      "minimize_status": 5,
+      "minos_errors": {
+        "EF_CoefA": {
+          "minus": null,
+          "plus": null
+        },
+        "EF_CoefB": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_beta_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_mu0_h": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_e": {
+          "minus": null,
+          "plus": null
+        },
+        "MV_vsat_h": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleAmp": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scaleOffset": {
+          "minus": null,
+          "plus": null
+        },
+        "SC_scale_zShift": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_e": {
+          "minus": null,
+          "plus": null
+        },
+        "TR_tau_h": {
+          "minus": null,
+          "plus": null
+        }
+      },
+      "minos_status": null,
+      "nll": 1e+100,
+      "randomized_parameters": [
+        "EF_CoefA",
+        "EF_CoefB",
+        "SC_scaleAmp",
+        "TR_tau_e",
+        "TR_tau_h",
+        "SC_scale_zShift"
+      ],
+      "timings": {
+        "minimize_elapsed_s": 0.22195161500712857,
+        "minos_elapsed_by_parameter_s": {},
+        "minos_elapsed_s": null,
+        "total_elapsed_s": 0.22854448901489377
+      }
+    }
+  ],
+  "rootfilename": "SiC_UVLED/RootFiles/20240704_1317_F2W1_-850V_1mm beam_400nm_LED_3.2_reps3_zscan_baseline_substrated.root",
+  "seed": 20260713
+}
