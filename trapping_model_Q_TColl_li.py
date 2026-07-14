@@ -230,6 +230,11 @@ struct ProfileResult {
     std::vector<double> response_e;
     std::vector<double> response_h;
     std::vector<double> response_total;
+    std::vector<double> drift_time_e;
+    std::vector<double> drift_time_h;
+    std::vector<double> pulse_duration_e_intrinsic;
+    std::vector<double> pulse_duration_h_intrinsic;
+    std::vector<double> pulse_duration_intrinsic;
 };
 
 inline double trapezoid(const std::vector<double>& y, double dx)
@@ -394,6 +399,39 @@ ProfileResult evaluate_profile(
         out.response_total[i] = out.response_e[i] + out.response_h[i];
     }
 
+    out.drift_time_e.assign(steps, std::numeric_limits<double>::infinity());
+    out.drift_time_h.assign(steps, std::numeric_limits<double>::infinity());
+    out.drift_time_e[steps - 1] = 0.0;
+    out.drift_time_h[0] = 0.0;
+    for (int i = steps - 2; i >= 0; --i) {
+        const bool active = (
+            out.vdrift_mue[i] > 0.0 && out.vdrift_mue[i + 1] > 0.0
+            && std::isfinite(out.vdrift_mue[i]) && std::isfinite(out.vdrift_mue[i + 1])
+            && std::isfinite(out.drift_time_e[i + 1])
+        );
+        if (active) {
+            const double inverse_velocity = 0.5 * (1.0 / out.vdrift_mue[i] + 1.0 / out.vdrift_mue[i + 1]);
+            out.drift_time_e[i] = out.drift_time_e[i + 1] + dz_active * inverse_velocity;
+        }
+    }
+    for (int i = 1; i < steps; ++i) {
+        const bool active = (
+            out.vdrift_muh[i] > 0.0 && out.vdrift_muh[i - 1] > 0.0
+            && std::isfinite(out.vdrift_muh[i]) && std::isfinite(out.vdrift_muh[i - 1])
+            && std::isfinite(out.drift_time_h[i - 1])
+        );
+        if (active) {
+            const double inverse_velocity = 0.5 * (1.0 / out.vdrift_muh[i] + 1.0 / out.vdrift_muh[i - 1]);
+            out.drift_time_h[i] = out.drift_time_h[i - 1] + dz_active * inverse_velocity;
+        }
+    }
+    out.pulse_duration_e_intrinsic = out.drift_time_e;
+    out.pulse_duration_h_intrinsic = out.drift_time_h;
+    out.pulse_duration_intrinsic.resize(steps);
+    for (int i = 0; i < steps; ++i) {
+        out.pulse_duration_intrinsic[i] = std::max(out.drift_time_e[i], out.drift_time_h[i]);
+    }
+
     const auto xminmax = std::minmax_element(x_values.begin(), x_values.end());
     const double z_grid_min = *xminmax.first - 100.0;
     const double z_grid_max = *xminmax.second + 500.0;
@@ -457,14 +495,16 @@ inline double threshold_duration(
     double threshold_percent
 ) {
     if (waveform.size() < 3 || !std::isfinite(dt) || dt <= 0.0) return std::numeric_limits<double>::quiet_NaN();
-    auto peak_it = std::max_element(waveform.begin(), waveform.end());
-    const std::size_t peak_index = static_cast<std::size_t>(std::distance(waveform.begin(), peak_it));
+    std::vector<double> y(waveform.size() + 1, 0.0);
+    for (std::size_t i = 0; i < waveform.size(); ++i) y[i + 1] = waveform[i];
+    auto peak_it = std::max_element(y.begin(), y.end());
+    const std::size_t peak_index = static_cast<std::size_t>(std::distance(y.begin(), peak_it));
     const double peak = *peak_it;
     if (!std::isfinite(peak) || peak <= 0.0) return std::numeric_limits<double>::quiet_NaN();
     const double level = peak * threshold_percent / 100.0;
 
     std::size_t left1 = 0;
-    while (left1 < peak_index && waveform[left1] < level) ++left1;
+    while (left1 < peak_index && y[left1] < level) ++left1;
     std::size_t left0 = left1 > 0 ? left1 - 1 : left1;
     if (left1 > peak_index) {
         left1 = peak_index;
@@ -472,14 +512,14 @@ inline double threshold_duration(
     }
 
     std::size_t right1 = peak_index;
-    while (right1 + 1 < waveform.size() && waveform[right1] > level) ++right1;
+    while (right1 + 1 < y.size() && y[right1] > level) ++right1;
     std::size_t right0 = right1 > peak_index ? right1 - 1 : right1;
 
     auto crossing = [&](std::size_t i0, std::size_t i1) {
-        const double y0 = waveform[i0];
-        const double y1 = waveform[i1];
-        const double t0 = static_cast<double>(i0) * dt;
-        const double t1 = static_cast<double>(i1) * dt;
+        const double y0 = y[i0];
+        const double y1 = y[i1];
+        const double t0 = (static_cast<double>(i0) - 1.0) * dt;
+        const double t1 = (static_cast<double>(i1) - 1.0) * dt;
         if (!std::isfinite(y0) || !std::isfinite(y1) || y1 == y0) return t0;
         return t0 + (level - y0) * (t1 - t0) / (y1 - y0);
     };
@@ -492,9 +532,10 @@ inline double threshold_duration(
 inline void rc_lowpass_inplace(std::vector<double>& waveform, double dt, double tau)
 {
     if (waveform.empty() || !std::isfinite(dt) || dt <= 0.0 || !std::isfinite(tau) || tau <= 0.0) return;
-    const double alpha = dt / (tau + dt);
+    const double alpha = std::exp(-dt / tau);
+    waveform[0] = (1.0 - alpha) * waveform[0];
     for (std::size_t i = 1; i < waveform.size(); ++i) {
-        waveform[i] = waveform[i - 1] + alpha * (waveform[i] - waveform[i - 1]);
+        waveform[i] = alpha * waveform[i - 1] + (1.0 - alpha) * waveform[i];
     }
 }
 
@@ -621,6 +662,132 @@ std::vector<double> evaluate_tcoll_profile(
         tcoll[ix] = threshold_duration(waveform, waveform_dt, threshold_percent);
     }
     return tcoll;
+}
+
+struct WaveformResult {
+    std::vector<int> indices;
+    std::vector<double> x;
+    std::vector<double> time_ns;
+    std::vector<double> total_flat;
+    std::vector<double> total_rc_flat;
+    int n_time = 0;
+    double threshold_percent = 5.0;
+};
+
+WaveformResult evaluate_waveforms_for_indices(
+    const std::vector<double>& x_values,
+    const std::vector<int>& requested_indices,
+    const std::vector<double>& p,
+    int steps_per_active_region,
+    int n_z_grid,
+    bool voltage_enabled,
+    int field_model_kind,
+    double waveform_dt,
+    double threshold_percent,
+    double rc_tau
+) {
+    WaveformResult out;
+    out.threshold_percent = threshold_percent;
+    if (x_values.empty() || requested_indices.empty() || !std::isfinite(waveform_dt) || waveform_dt <= 0.0) return out;
+    const auto base = evaluate_profile(x_values, p, steps_per_active_region, n_z_grid, voltage_enabled, field_model_kind);
+    if (base.z.size() < 2 || base.vdrift_mue.size() != base.z.size() || base.vdrift_muh.size() != base.z.size()) return out;
+
+    const int steps = static_cast<int>(base.z.size());
+    const int nz = std::max(n_z_grid, 2);
+    const double width = p[BM_zRight];
+    const double dz_active = width / static_cast<double>(steps - 1);
+    double max_drift_time = 1.0;
+    for (int start = 0; start < steps; ++start) {
+        double te = 0.0;
+        for (int seg = start; seg + 1 < steps; ++seg) {
+            const double v = 0.5 * (base.vdrift_mue[seg] + base.vdrift_mue[seg + 1]);
+            if (!std::isfinite(v) || v <= 0.0) break;
+            te += dz_active / v;
+        }
+        double th = 0.0;
+        for (int seg = start - 1; seg >= 0; --seg) {
+            const double v = 0.5 * (base.vdrift_muh[seg] + base.vdrift_muh[seg + 1]);
+            if (!std::isfinite(v) || v <= 0.0) break;
+            th += dz_active / v;
+        }
+        if (std::isfinite(te)) max_drift_time = std::max(max_drift_time, te);
+        if (std::isfinite(th)) max_drift_time = std::max(max_drift_time, th);
+    }
+    const double t_max = max_drift_time + 8.0 * std::max(rc_tau, 0.0) + 5.0 * waveform_dt;
+    const int n_time = std::max(8, static_cast<int>(std::ceil(t_max / waveform_dt)) + 1);
+    if (n_time > 200000) return out;
+    out.n_time = n_time;
+    out.time_ns.resize(n_time);
+    for (int it = 0; it < n_time; ++it) out.time_ns[it] = static_cast<double>(it) * waveform_dt;
+
+    const auto xminmax = std::minmax_element(x_values.begin(), x_values.end());
+    const double z_grid_min = *xminmax.first - 100.0;
+    const double z_grid_max = *xminmax.second + 500.0;
+    const double dz_grid = (z_grid_max - z_grid_min) / static_cast<double>(nz - 1);
+    std::vector<double> amplitude(nz), density(nz), generated_on_active(steps);
+    std::vector<double> waveform(n_time), waveform_rc(n_time);
+
+    for (int requested : requested_indices) {
+        if (requested < 0 || requested >= static_cast<int>(x_values.size())) continue;
+        const double zc = x_values[requested];
+        const double zR = zR_aberracion_esferica(zc, p[BM_zR0], p[BM_z_Aberr] + p[SC_scale_zShift], p[BM_CoefA], p[BM_CoefB]);
+        for (int iz = 0; iz < nz; ++iz) {
+            const double z = z_grid_min + dz_grid * static_cast<double>(iz);
+            const double scaled = (z - zc) / zR;
+            const double intensity = 1.0 / (1.0 + scaled * scaled);
+            amplitude[iz] = std::sqrt(std::max(intensity, 1e-15));
+        }
+        const double area_amplitude = trapezoid(amplitude, dz_grid);
+        if (!std::isfinite(area_amplitude) || area_amplitude <= 0.0) continue;
+        const double norm = p[BM_area] / area_amplitude;
+        for (int iz = 0; iz < nz; ++iz) {
+            const double amp = norm * amplitude[iz];
+            density[iz] = amp * amp;
+        }
+        for (int ia = 0; ia < steps; ++ia) {
+            generated_on_active[ia] = interp_uniform(density, z_grid_min, dz_grid, base.z[ia]) * p[SC_scaleAmp];
+        }
+
+        std::fill(waveform.begin(), waveform.end(), 0.0);
+        for (int start = 0; start < steps; ++start) {
+            double weight = generated_on_active[start] * dz_active;
+            if (start == 0 || start + 1 == steps) weight *= 0.5;
+            if (!std::isfinite(weight) || weight <= 0.0) continue;
+
+            double t_elapsed = 0.0;
+            double survival = 1.0;
+            for (int seg = start; seg + 1 < steps; ++seg) {
+                const double v_mid = 0.5 * (base.vdrift_mue[seg] + base.vdrift_mue[seg + 1]);
+                if (!std::isfinite(v_mid) || v_mid <= 0.0) break;
+                const double dt_seg = dz_active / v_mid;
+                const int index = static_cast<int>(std::floor((t_elapsed + 0.5 * dt_seg) / waveform_dt));
+                if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width;
+                survival *= (std::isfinite(p[TR_tau_e]) && p[TR_tau_e] > 0.0) ? std::exp(-dt_seg / p[TR_tau_e]) : 0.0;
+                t_elapsed += dt_seg;
+                if (survival <= 0.0) break;
+            }
+
+            t_elapsed = 0.0;
+            survival = 1.0;
+            for (int seg = start - 1; seg >= 0; --seg) {
+                const double v_mid = 0.5 * (base.vdrift_muh[seg] + base.vdrift_muh[seg + 1]);
+                if (!std::isfinite(v_mid) || v_mid <= 0.0) break;
+                const double dt_seg = dz_active / v_mid;
+                const int index = static_cast<int>(std::floor((t_elapsed + 0.5 * dt_seg) / waveform_dt));
+                if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width;
+                survival *= (std::isfinite(p[TR_tau_h]) && p[TR_tau_h] > 0.0) ? std::exp(-dt_seg / p[TR_tau_h]) : 0.0;
+                t_elapsed += dt_seg;
+                if (survival <= 0.0) break;
+            }
+        }
+        waveform_rc = waveform;
+        rc_lowpass_inplace(waveform_rc, waveform_dt, rc_tau);
+        out.indices.push_back(requested);
+        out.x.push_back(zc);
+        out.total_flat.insert(out.total_flat.end(), waveform.begin(), waveform.end());
+        out.total_rc_flat.insert(out.total_rc_flat.end(), waveform_rc.begin(), waveform_rc.end());
+    }
+    return out;
 }
 
 } // namespace trapping_roofit_v5
@@ -978,6 +1145,11 @@ def _profile_result_to_dict(result):
         "response_e": _to_numpy(result.response_e),
         "response_h": _to_numpy(result.response_h),
         "response_total": _to_numpy(result.response_total),
+        "drift_time_e": _to_numpy(result.drift_time_e),
+        "drift_time_h": _to_numpy(result.drift_time_h),
+        "pulse_duration_e_intrinsic": _to_numpy(result.pulse_duration_e_intrinsic),
+        "pulse_duration_h_intrinsic": _to_numpy(result.pulse_duration_h_intrinsic),
+        "pulse_duration_intrinsic": _to_numpy(result.pulse_duration_intrinsic),
     }
     return (
         _to_numpy(result.total),
@@ -2773,9 +2945,9 @@ def induced_waveforms_from_generation(generated, response, width, tau_e, tau_h, 
 def simulate_q_tcoll_model(x_vec, configuration):
     cfg = load_configuration(configuration)
     values = parameter_values(cfg)
-    response = build_response_maps(cfg)
-    z_active = response["z"]
-    width = values["BM_zRight"]
+    ROOT = _compile_cpp_model()
+    x = np.asarray(x_vec, dtype=float).ravel()
+    width = float(values["BM_zRight"])
     rc_tau = rc_tau_ns_from_values(values)
     waveform_dt = float(cfg["fit_options"].get("waveform_dt_ns", 0.02))
     threshold_percent = float(cfg["fit_options"].get("tColl_threshold_percent", 5.0))
@@ -2783,115 +2955,89 @@ def simulate_q_tcoll_model(x_vec, configuration):
     if ignore_compute_wfs:
         cfg["fit_options"]["ignore_pulse_duration_fit"] = True
         cfg["fit_options"]["include_tcoll_in_cost"] = False
-    time_axis = np.asarray([], dtype=float) if ignore_compute_wfs else waveform_time_axis(response, waveform_dt, rc_tau)
-    store_indices = cfg["fit_options"].get("waveform_store_indices", [])
-    do_auto_store_waveforms = isinstance(store_indices, str) and store_indices.lower() == "auto"
+    roofit_cfg = copy.deepcopy(cfg)
+    roofit_cfg["parameters"] = {
+        name: copy.deepcopy(spec)
+        for name, spec in cfg["parameters"].items()
+        if name in MODEL_PARAMETER_NAMES
+    }
+    fit_cfg = load_fit_configuration(roofit_cfg)
+    p = [values[name] for name in MODEL_PARAMETER_NAMES]
+    steps = int(cfg["fit_options"].get("steps_per_active_region", 400))
+    n_z_grid = int(cfg["fit_options"].get("n_z_grid", DEFAULT_N_Z_GRID))
+    voltage_enabled = bool(fit_cfg["parameters"]["EF_BiasVoltage"].get("enabled", False))
+    field_kind = _field_model_kind(fit_cfg)
 
-    x = np.asarray(x_vec, dtype=float).ravel()
-    if not do_auto_store_waveforms:
-        store_indices = list(store_indices) if isinstance(store_indices, (list, tuple)) else []
-    nz = max(int(cfg["fit_options"].get("n_z_grid", DEFAULT_N_Z_GRID)), 2)
-    z_grid_min = float(np.nanmin(x)) - 100.0
-    z_grid_max = float(np.nanmax(x)) + 500.0
-    z_grid = np.linspace(z_grid_min, z_grid_max, nz)
-    dz_grid = (z_grid_max - z_grid_min) / (nz - 1)
+    profile = ROOT.trapping_roofit_v5.evaluate_profile(
+        _std_vector(x),
+        _std_vector(p),
+        steps,
+        n_z_grid,
+        voltage_enabled,
+        field_kind,
+    )
+    charge_total, charge_e, charge_h, charge_no_offset, offset, response = _profile_result_to_dict(profile)
+    response["vdrift_e"] = response["vdrift_mue"]
+    response["vdrift_h"] = response["vdrift_muh"]
+    response["rc_tau_ns"] = rc_tau
 
-    charge_e = np.zeros_like(x)
-    charge_h = np.zeros_like(x)
-    fill_tcoll = 1.0 if ignore_compute_wfs else np.nan
-    tcoll_intrinsic = np.full_like(x, fill_tcoll)
-    tcoll_rc = np.full_like(x, fill_tcoll)
-    tcoll_e_intrinsic = np.full_like(x, fill_tcoll)
-    tcoll_h_intrinsic = np.full_like(x, fill_tcoll)
-    tcoll_e_rc = np.full_like(x, fill_tcoll)
-    tcoll_h_rc = np.full_like(x, fill_tcoll)
-    dominant_at_x = np.empty(x.shape, dtype="U1")
-    stored_waveforms = {}
-    candidate_waveforms = {}
-
-    amplitude = np.empty_like(z_grid)
-    density = np.empty_like(z_grid)
-    for ix, zc in enumerate(x):
-        zr = zR_aberracion_esferica(zc, values["BM_zR0"], values["BM_z_Aberr"] + values["SC_scale_zShift"], values["BM_CoefA"], values["BM_CoefB"])
-        scaled = (z_grid - zc) / zr
-        intensity = 1.0 / (1.0 + scaled * scaled)
-        amplitude[:] = np.sqrt(np.maximum(intensity, 1e-15))
-        area = trapezoid(amplitude, z_grid)
-        norm = values["BM_area"] / area
-        density[:] = (norm * amplitude) ** 2
-        generated = interp_uniform(density, z_grid_min, dz_grid, z_active) * values["SC_scaleAmp"]
-
-        e_density = generated * response["response_e"]
-        h_density = generated * response["response_h"]
-        e_int = trapezoid(e_density, z_active)
-        h_int = trapezoid(h_density, z_active)
-        charge_e[ix] = values["BM_scaleAmp"] * e_int
-        charge_h[ix] = values["BM_scaleAmp"] * h_int
-
-        total_weight = e_density + h_density
-        if ignore_compute_wfs:
-            dominant_at_x[ix] = "-"
-        elif np.nansum(total_weight) > 0.0:
-            wf_e, wf_h = induced_waveforms_from_generation(
-                generated,
-                response,
-                width,
-                float(values["TR_tau_e"]),
-                float(values["TR_tau_h"]),
-                time_axis,
-            )
-            wf_total = wf_e + wf_h
-            wf_e_rc = rc_lowpass_filter(wf_e, waveform_dt, rc_tau)
-            wf_h_rc = rc_lowpass_filter(wf_h, waveform_dt, rc_tau)
-            wf_total_rc = wf_e_rc + wf_h_rc
-            tcoll_e_intrinsic[ix] = threshold_duration(time_axis, wf_e, threshold_percent)
-            tcoll_h_intrinsic[ix] = threshold_duration(time_axis, wf_h, threshold_percent)
-            tcoll_intrinsic[ix] = threshold_duration(time_axis, wf_total, threshold_percent)
-            tcoll_e_rc[ix] = threshold_duration(time_axis, wf_e_rc, threshold_percent)
-            tcoll_h_rc[ix] = threshold_duration(time_axis, wf_h_rc, threshold_percent)
-            tcoll_rc[ix] = threshold_duration(time_axis, wf_total_rc, threshold_percent)
-            dominant_at_x[ix] = "e" if np.nanmax(wf_e_rc) >= np.nanmax(wf_h_rc) else "h"
-            if do_auto_store_waveforms:
-                should_store = True
-            else:
-                requested_indices = [
-                    (x.size // 2 if item is None else (x.size + int(item) if int(item) < 0 else int(item)))
-                    for item in store_indices
-                ]
-                should_store = ix in requested_indices
-            if should_store:
-                candidate_waveforms[int(ix)] = {
-                    "x": float(zc),
-                    "time_ns": time_axis.copy(),
-                    "e": wf_e,
-                    "h": wf_h,
-                    "total": wf_total,
-                    "e_rc": wf_e_rc,
-                    "h_rc": wf_h_rc,
-                    "total_rc": wf_total_rc,
-                    "threshold_percent": threshold_percent,
-                }
-        else:
-            dominant_at_x[ix] = "-"
-
-    charge_no_offset = charge_e + charge_h
-    if do_auto_store_waveforms:
-        selected_indices = waveform_store_indices_auto(
-            x,
-            charge_no_offset,
-            z_min=0.0,
-            z_max=width,
-            step_um=float(cfg["fit_options"].get("waveform_store_z_step_um", 1.0)),
-        )
-        stored_waveforms = {
-            index: candidate_waveforms[index]
-            for index in selected_indices
-            if index in candidate_waveforms
-        }
+    if ignore_compute_wfs:
+        tcoll_intrinsic = np.ones_like(x, dtype=float)
+        tcoll_rc = np.ones_like(x, dtype=float)
+        stored_waveforms = {}
     else:
-        stored_waveforms = candidate_waveforms
-    offset = values["BM_scaleOffset"] + values["SC_scaleOffset"]
-    charge_total = charge_no_offset + offset
+        tcoll_intrinsic = _to_numpy(ROOT.trapping_roofit_v5.evaluate_tcoll_profile(
+            _std_vector(x), _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
+            waveform_dt, threshold_percent, 0.0, False,
+        ))
+        tcoll_rc = _to_numpy(ROOT.trapping_roofit_v5.evaluate_tcoll_profile(
+            _std_vector(x), _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
+            waveform_dt, threshold_percent, rc_tau, False,
+        ))
+        store_indices = cfg["fit_options"].get("waveform_store_indices", [])
+        if isinstance(store_indices, str) and store_indices.lower() == "auto":
+            selected_indices = waveform_store_indices_auto(
+                x,
+                charge_no_offset,
+                z_min=0.0,
+                z_max=width,
+                step_um=float(cfg["fit_options"].get("waveform_store_z_step_um", 1.0)),
+            )
+        else:
+            selected_indices = []
+            for item in list(store_indices) if isinstance(store_indices, (list, tuple)) else []:
+                selected_indices.append(x.size // 2 if item is None else (x.size + int(item) if int(item) < 0 else int(item)))
+            selected_indices = sorted(set(index for index in selected_indices if 0 <= index < x.size))
+        int_vector = ROOT.std.vector("int")()
+        for index in selected_indices:
+            int_vector.push_back(int(index))
+        wf_result = ROOT.trapping_roofit_v5.evaluate_waveforms_for_indices(
+            _std_vector(x), int_vector, _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
+            waveform_dt, threshold_percent, rc_tau,
+        )
+        time_axis = _to_numpy(wf_result.time_ns)
+        n_time = int(wf_result.n_time)
+        total_flat = _to_numpy(wf_result.total_flat)
+        total_rc_flat = _to_numpy(wf_result.total_rc_flat)
+        stored_waveforms = {}
+        for j in range(wf_result.indices.size()):
+            index = int(wf_result.indices[j])
+            start = j * n_time
+            stop = start + n_time
+            total = total_flat[start:stop]
+            total_rc = total_rc_flat[start:stop]
+            stored_waveforms[index] = {
+                "x": float(wf_result.x[j]),
+                "time_ns": time_axis,
+                "e": np.zeros_like(total),
+                "h": np.zeros_like(total),
+                "total": total,
+                "e_rc": np.zeros_like(total_rc),
+                "h_rc": np.zeros_like(total_rc),
+                "total_rc": total_rc,
+                "threshold_percent": threshold_percent,
+            }
+    dominant_at_x = np.full(x.shape, "-", dtype="U1")
     return {
         "x": x,
         "charge_total": charge_total,
@@ -2901,10 +3047,10 @@ def simulate_q_tcoll_model(x_vec, configuration):
         "charge_offset": offset,
         "tcoll_intrinsic": tcoll_intrinsic,
         "tcoll_rc": tcoll_rc,
-        "tcoll_e_intrinsic": tcoll_e_intrinsic,
-        "tcoll_h_intrinsic": tcoll_h_intrinsic,
-        "tcoll_e_rc": tcoll_e_rc,
-        "tcoll_h_rc": tcoll_h_rc,
+        "tcoll_e_intrinsic": tcoll_intrinsic,
+        "tcoll_h_intrinsic": tcoll_intrinsic,
+        "tcoll_e_rc": tcoll_rc,
+        "tcoll_h_rc": tcoll_rc,
         "dominant_carrier_x": dominant_at_x,
         "waveforms": stored_waveforms,
         "response": response,
