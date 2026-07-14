@@ -1,0 +1,243 @@
+{
+  "charge_error_systematic": 0.0,
+  "configuration": {
+    "fit_options": {
+      "charge_error_systematic": 0.0,
+      "constraint_range_sigmas": 10.0,
+      "do_useMINOS": false,
+      "field_model": "double_exponential",
+      "ignore_compute_WFs": true,
+      "ignore_pulse_duration_fit": true,
+      "include_tcoll_in_cost": false,
+      "minimizer_algorithm": "Minimize",
+      "minimizer_type": "Minuit2",
+      "n_z_grid": 20001,
+      "params_MINOS": [],
+      "print_level": -1,
+      "pulse_duration_model": "ramo_waveform",
+      "rangeType_percetual": false,
+      "rc_model": "first_order_lowpass",
+      "refit_fromLocalMinimumMINOS": false,
+      "relative_sigma_floor_fraction": 1e-06,
+      "relative_sigma_fraction": 0.0175,
+      "show_roofit_output": false,
+      "steps_per_active_region": 400,
+      "strategy": 1,
+      "tColl_error_systematic_ns": 0.0,
+      "tColl_source_tree": "SignalTPA_best_masked",
+      "tColl_threshold_percent": 10,
+      "table_sigfigs": 4,
+      "waveform_dt_ns": 0.02,
+      "waveform_store_indices": "auto",
+      "waveform_store_z_step_um": 1.0
+    },
+    "parameters": {
+      "BM_CoefA": {
+        "type": "fixed",
+        "value": 0.004461681253026355
+      },
+      "BM_CoefB": {
+        "type": "fixed",
+        "value": 0.0017325631823942112
+      },
+      "BM_area": {
+        "type": "fixed",
+        "value": 9.106901819568089
+      },
+      "BM_scaleAmp": {
+        "type": "fixed",
+        "value": 1.9048051801350496
+      },
+      "BM_scaleOffset": {
+        "type": "fixed",
+        "value": -0.031227930105467934
+      },
+      "BM_z0": {
+        "type": "fixed",
+        "value": -2.561761988852449
+      },
+      "BM_zR0": {
+        "constraint": {
+          "mean": 4.385374879802671,
+          "sigma": 0.099030703645953
+        },
+        "type": "fixed",
+        "value": 4.385374879802671
+      },
+      "BM_zRight": {
+        "type": "fixed",
+        "value": 50.337266961172645
+      },
+      "BM_z_Aberr": {
+        "type": "fixed",
+        "value": 12.624987247362315
+      },
+      "EF_BiasVoltage": {
+        "enabled": true,
+        "type": "fixed",
+        "value": 850.0
+      },
+      "EF_CoefA": {
+        "type": "fixed",
+        "value": 0.0
+      },
+      "EF_CoefB": {
+        "type": "fixed",
+        "value": 0.0
+      },
+      "EF_CoefC": {
+        "type": "fixed",
+        "value": 0.0
+      },
+      "EF_ExpAmpLeft": {
+        "max": 150.0,
+        "min": 0.0,
+        "type": "fit",
+        "value": 62.43103273195004
+      },
+      "EF_ExpAmpRight": {
+        "type": "fixed",
+        "value": 1.0
+      },
+      "EF_ExpDecayLeft": {
+        "max": 250.0,
+        "min": 0.2,
+        "type": "fit",
+        "value": 5.019618860643831
+      },
+      "EF_ExpDecayRight": {
+        "max": 250.0,
+        "min": 0.2,
+        "type": "fit",
+        "value": 4.17407169210982
+      },
+      "EF_z0": {
+        "type": "fixed",
+        "value": 0.0
+      },
+      "MV_beta_e": {
+        "constraint": {
+          "mean": 0.96,
+          "sigma": 0.01
+        },
+        "type": "fit",
+        "value": 0.96
+      },
+      "MV_beta_h": {
+        "constraint": {
+          "mean": 1.02,
+          "sigma": 0.02
+        },
+        "type": "fit",
+        "value": 1.02
+      },
+      "MV_mu0_e": {
+        "constraint": {
+          "mean": 95.0,
+          "sigma": 5.0
+        },
+        "type": "fit",
+        "value": 95.0
+      },
+      "MV_mu0_h": {
+        "constraint": {
+          "mean": 11.5,
+          "sigma": 1.0
+        },
+        "type": "fit",
+        "value": 11.5
+      },
+      "MV_vsat_e": {
+        "constraint": {
+          "mean": 147.0,
+          "sigma": 2.0
+        },
+        "type": "fit",
+        "value": 147.0
+      },
+      "MV_vsat_h": {
+        "constraint": {
+          "mean": 69.0,
+          "sigma": 4.0
+        },
+        "type": "fit",
+        "value": 69.0
+      },
+      "RC_capacitance_pF": {
+        "type": "fixed",
+        "value": 16.0
+      },
+      "RC_extra_sigma_ns": {
+        "type": "fixed",
+        "value": 0.0
+      },
+      "RC_resistance_ohm": {
+        "type": "fixed",
+        "value": 50.0
+      },
+      "SC_scaleAmp": {
+        "constraint": {
+          "mean": 1.0,
+          "sigma": 0.2
+        },
+        "type": "fit",
+        "value": 1.0
+      },
+      "SC_scaleOffset": {
+        "constraint": {
+          "mean": 0.002,
+          "sigma": 0.016
+        },
+        "type": "fixed",
+        "value": 0.016
+      },
+      "SC_scale_zShift": {
+        "max": 7.0,
+        "min": 0.0,
+        "type": "fit",
+        "value": 4.657
+      },
+      "TR_tau_e": {
+        "max": 50.0,
+        "min": 0.001,
+        "type": "fixed",
+        "value": 5.0
+      },
+      "TR_tau_h": {
+        "max": 1.0,
+        "min": 0.001,
+        "type": "fit",
+        "value": 0.26
+      }
+    }
+  },
+  "description": "Manual Q+TColl double-exponential control. Uses the RooFit charge-profile fit when pulse-duration fitting is ignored.",
+  "interactive_state": {
+    "chi2": 386.34570800709724,
+    "chi2_dof": 9.423066048953592,
+    "dof": 41,
+    "field_model": "double_exponential",
+    "source_script": "interactive_profile_model_sliders_doubleExp.py",
+    "updated_parameters": {
+      "EF_BiasVoltage": 850.0,
+      "EF_ExpAmpLeft": 62.43103273195004,
+      "EF_ExpDecayLeft": 5.019618860643831,
+      "EF_ExpDecayRight": 4.17407169210982,
+      "SC_scaleAmp": 1.506,
+      "SC_scaleOffset": 0.01,
+      "SC_scale_zShift": 4.657,
+      "TR_tau_e": 0.3851089259723117,
+      "TR_tau_h": 0.06930653623531807
+    }
+  },
+  "profile_index": 4,
+  "profile_sigma_floor": 0.0,
+  "refresh_interval_s": 1.5,
+  "residual_sigma_fraction": 0.0175,
+  "rootfilename": "SiC_UVLED/RootFiles/20240704_1317_F2W1_-850V_1mm beam_400nm_LED_3.2_reps3_zscan_baseline_substrated.root",
+  "tColl_error_systematic_ns": 0.0,
+  "tColl_source_tree": "SignalTPA_best_masked",
+  "tColl_threshold_percent": 10,
+  "template_source": "SiC_UVLED/configs/RooFit_manual_single_profile_control_doubleExp.json",
+  "use_profile_file_errors": true
+}

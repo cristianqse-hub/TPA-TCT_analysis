@@ -110,7 +110,30 @@ def load_fit_configuration(configuration):
     options.setdefault("table_sigfigs", 4)
     options.setdefault("refit_fromLocalMinimumMINOS", False)
     options.setdefault("show_roofit_output", False)
+    options.setdefault("field_model", "polynomial")
+    options["field_model"] = _canonical_field_model(options["field_model"])
     return config
+
+
+def _canonical_field_model(field_model):
+    text = str(field_model).strip().lower().replace("-", "_")
+    aliases = {
+        "poly": "polynomial",
+        "polynomial": "polynomial",
+        "double_exp": "double_exponential",
+        "double_exponential": "double_exponential",
+        "doublejunction": "double_exponential",
+        "double_junction": "double_exponential",
+    }
+    if text not in aliases:
+        raise ValueError(
+            "fit_options['field_model'] must be 'polynomial' or 'double_exponential'"
+        )
+    return aliases[text]
+
+
+def _field_model_kind(config):
+    return 1 if _canonical_field_model(config["fit_options"].get("field_model", "polynomial")) == "double_exponential" else 0
 
 
 def _std_vector(values):
@@ -164,7 +187,7 @@ def _json_ready(value):
 def _compile_cpp_model():
     import ROOT
 
-    if getattr(ROOT, "TrappingGaussianNLLV4", None) is not None:
+    if getattr(ROOT, "TrappingGaussianNLLV5", None) is not None:
         return ROOT
 
     ROOT.gInterpreter.Declare(
@@ -179,7 +202,7 @@ def _compile_cpp_model():
 #include "RooArgList.h"
 #include "RooListProxy.h"
 
-namespace trapping_roofit_v4 {
+namespace trapping_roofit_v5 {
 
 enum ParameterIndex {
     BM_z0 = 0, BM_zRight, BM_zR0, BM_z_Aberr,
@@ -187,6 +210,7 @@ enum ParameterIndex {
     MV_beta_e, MV_vsat_e, MV_mu0_e,
     MV_beta_h, MV_vsat_h, MV_mu0_h,
     EF_BiasVoltage, EF_CoefA, EF_CoefB, EF_CoefC, EF_z0,
+    EF_ExpAmpLeft, EF_ExpDecayLeft, EF_ExpAmpRight, EF_ExpDecayRight,
     SC_scaleAmp, TR_tau_e, TR_tau_h, SC_scaleOffset, SC_scale_zShift,
     N_PARAMETERS
 };
@@ -239,7 +263,8 @@ ProfileResult evaluate_profile(
     const std::vector<double>& p,
     int steps_per_active_region,
     int n_z_grid,
-    bool voltage_enabled
+    bool voltage_enabled,
+    int field_model_kind
 ) {
     ProfileResult out;
     if (p.size() < N_PARAMETERS || x_values.empty()) return out;
@@ -259,13 +284,24 @@ ProfileResult evaluate_profile(
     }
 
     double field_c = p[EF_CoefC];
-    if (voltage_enabled) {
+    double exp_amp_right = p[EF_ExpAmpRight];
+    if (field_model_kind == 0 && voltage_enabled) {
         const double center = p[EF_z0];
         const double u_left = -center;
         const double u_right = width - center;
         const double quadratic_integral = p[EF_CoefA] * (std::pow(u_right, 3) - std::pow(u_left, 3)) / 3.0;
         const double linear_integral = p[EF_CoefB] * (u_right * u_right - u_left * u_left) / 2.0;
         field_c = (p[EF_BiasVoltage] - quadratic_integral - linear_integral) / width;
+    } else if (field_model_kind == 1 && voltage_enabled) {
+        const double lambda_left = std::max(p[EF_ExpDecayLeft], 1e-12);
+        const double lambda_right = std::max(p[EF_ExpDecayRight], 1e-12);
+        const double left_integral = lambda_left * (1.0 - std::exp(-width / lambda_left));
+        const double right_integral = lambda_right * (1.0 - std::exp(-width / lambda_right));
+        if (!std::isfinite(left_integral) || !std::isfinite(right_integral) || right_integral <= 0.0) {
+            out.total.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+            return out;
+        }
+        exp_amp_right = (p[EF_BiasVoltage] - p[EF_ExpAmpLeft] * left_integral) / right_integral;
     }
 
     out.efield.resize(steps);
@@ -276,8 +312,19 @@ ProfileResult evaluate_profile(
     const double field_center_abs = z0_shifted + p[EF_z0];
     const double field_floor = 1e-2;
     for (int i = 0; i < steps; ++i) {
-        const double u = out.z[i] - field_center_abs;
-        const double efield = p[EF_CoefA] * u * u + p[EF_CoefB] * u + field_c;
+        double efield = 0.0;
+        if (field_model_kind == 1) {
+            const double s = out.z[i] - z0_shifted;
+            const double lambda_left = std::max(p[EF_ExpDecayLeft], 1e-12);
+            const double lambda_right = std::max(p[EF_ExpDecayRight], 1e-12);
+            efield = (
+                p[EF_ExpAmpLeft] * std::exp(-s / lambda_left)
+                + exp_amp_right * std::exp(-(width - s) / lambda_right)
+            );
+        } else {
+            const double u = out.z[i] - field_center_abs;
+            efield = p[EF_CoefA] * u * u + p[EF_CoefB] * u + field_c;
+        }
         if (!std::isfinite(efield)) {
             out.total.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
             return out;
@@ -404,13 +451,13 @@ ProfileResult evaluate_profile(
     return out;
 }
 
-} // namespace trapping_roofit_v4
+} // namespace trapping_roofit_v5
 
-class TrappingGaussianNLLV4 : public RooAbsReal {
+class TrappingGaussianNLLV5 : public RooAbsReal {
 public:
-    TrappingGaussianNLLV4() {}
+    TrappingGaussianNLLV5() {}
 
-    TrappingGaussianNLLV4(
+    TrappingGaussianNLLV5(
         const char* name,
         const char* title,
         RooArgList& parameters,
@@ -422,7 +469,8 @@ public:
         const std::vector<double>& constraint_sigma,
         int steps_per_active_region,
         int n_z_grid,
-        bool voltage_enabled
+        bool voltage_enabled,
+        int field_model_kind
     )
         : RooAbsReal(name, title),
           parameters_("parameters", "parameters", this),
@@ -434,12 +482,13 @@ public:
           constraint_sigma_(constraint_sigma),
           steps_per_active_region_(steps_per_active_region),
           n_z_grid_(n_z_grid),
-          voltage_enabled_(voltage_enabled)
+          voltage_enabled_(voltage_enabled),
+          field_model_kind_(field_model_kind)
     {
         parameters_.add(parameters);
     }
 
-    TrappingGaussianNLLV4(const TrappingGaussianNLLV4& other, const char* name = nullptr)
+    TrappingGaussianNLLV5(const TrappingGaussianNLLV5& other, const char* name = nullptr)
         : RooAbsReal(other, name),
           parameters_("parameters", this, other.parameters_),
           x_(other.x_),
@@ -450,23 +499,24 @@ public:
           constraint_sigma_(other.constraint_sigma_),
           steps_per_active_region_(other.steps_per_active_region_),
           n_z_grid_(other.n_z_grid_),
-          voltage_enabled_(other.voltage_enabled_)
+          voltage_enabled_(other.voltage_enabled_),
+          field_model_kind_(other.field_model_kind_)
     {}
 
-    TObject* clone(const char* newname) const override { return new TrappingGaussianNLLV4(*this, newname); }
+    TObject* clone(const char* newname) const override { return new TrappingGaussianNLLV5(*this, newname); }
 
 protected:
     double evaluate() const override
     {
-        std::vector<double> p(trapping_roofit_v4::N_PARAMETERS);
-        for (int i = 0; i < trapping_roofit_v4::N_PARAMETERS; ++i) {
+        std::vector<double> p(trapping_roofit_v5::N_PARAMETERS);
+        for (int i = 0; i < trapping_roofit_v5::N_PARAMETERS; ++i) {
             const auto* value = dynamic_cast<const RooAbsReal*>(parameters_.at(i));
             if (!value) return 1e100;
             p[i] = value->getVal();
         }
 
-        const auto profile = trapping_roofit_v4::evaluate_profile(
-            x_, p, steps_per_active_region_, n_z_grid_, voltage_enabled_
+        const auto profile = trapping_roofit_v5::evaluate_profile(
+            x_, p, steps_per_active_region_, n_z_grid_, voltage_enabled_, field_model_kind_
         );
         if (profile.total.size() != y_.size()) return 1e100;
 
@@ -481,7 +531,7 @@ protected:
         }
         for (std::size_t i = 0; i < constraint_index_.size(); ++i) {
             const int index = constraint_index_[i];
-            if (index < 0 || index >= trapping_roofit_v4::N_PARAMETERS) continue;
+            if (index < 0 || index >= trapping_roofit_v5::N_PARAMETERS) continue;
             const double sigma = constraint_sigma_[i];
             if (!std::isfinite(sigma) || sigma <= 0.0) return 1e100;
             const double pull = (p[index] - constraint_mean_[i]) / sigma;
@@ -501,6 +551,7 @@ private:
     int steps_per_active_region_ = 400;
     int n_z_grid_ = 20001;
     bool voltage_enabled_ = false;
+    int field_model_kind_ = 0;
 };
         '''
     )
@@ -513,6 +564,8 @@ def _parameter_values(parameter_specs, fit_names=None, fit_vector=None):
 
 def _effective_fit_names(parameter_specs):
     disabled = {"EF_CoefC"}
+    if bool(parameter_specs["EF_BiasVoltage"].get("enabled", False)):
+        disabled.add("EF_ExpAmpRight")
     return [name for name in _base._effective_fit_names(parameter_specs) if name not in disabled]
 
 
@@ -522,8 +575,18 @@ def _resolved_fit_bounds(parameter_specs, fit_names, fit_options):
 
 def _configuration_values(config):
     values = _parameter_values(config["parameters"])
-    values["EF_CoefC"] = _derived_field_constant(values)
+    _apply_derived_field_values(values, config)
     return np.array([values[name] for name in MODEL_PARAMETER_NAMES], dtype=float)
+
+
+def _apply_derived_field_values(values, config):
+    model = _canonical_field_model(config["fit_options"].get("field_model", "polynomial"))
+    if bool(config["parameters"]["EF_BiasVoltage"].get("enabled", False)):
+        if model == "double_exponential":
+            values["EF_ExpAmpRight"] = _derived_exp_amp_right(values)
+        else:
+            values["EF_CoefC"] = _derived_field_constant(values)
+    return values
 
 
 def _derived_field_constant(values):
@@ -547,6 +610,35 @@ def _field_voltage_from_coefficients(values):
         float(values["EF_CoefA"]) * (u_right**3 - u_left**3) / 3.0
         + float(values["EF_CoefB"]) * (u_right**2 - u_left**2) / 2.0
         + float(values["EF_CoefC"]) * width
+    )
+
+
+def _exp_integral(width, decay):
+    decay = float(decay)
+    if not np.isfinite(width) or width <= 0.0:
+        raise ValueError("BM_zRight must be finite and positive")
+    if not np.isfinite(decay) or decay <= 0.0:
+        raise ValueError("Double-exponential decay lengths must be finite and positive")
+    return decay * (1.0 - np.exp(-width / decay))
+
+
+def _derived_exp_amp_right(values):
+    width = float(values["BM_zRight"])
+    left_integral = _exp_integral(width, values["EF_ExpDecayLeft"])
+    right_integral = _exp_integral(width, values["EF_ExpDecayRight"])
+    if right_integral <= 0.0:
+        raise ValueError("EF_ExpDecayRight gives a non-positive field integral")
+    return (
+        float(values["EF_BiasVoltage"])
+        - float(values["EF_ExpAmpLeft"]) * left_integral
+    ) / right_integral
+
+
+def _field_voltage_from_double_exponential(values):
+    width = float(values["BM_zRight"])
+    return (
+        float(values["EF_ExpAmpLeft"]) * _exp_integral(width, values["EF_ExpDecayLeft"])
+        + float(values["EF_ExpAmpRight"]) * _exp_integral(width, values["EF_ExpDecayRight"])
     )
 
 
@@ -580,12 +672,13 @@ def simulate_trapping_model(x_vec, configuration):
     config = load_fit_configuration(configuration)
     ROOT = _compile_cpp_model()
     options = config["fit_options"]
-    result = ROOT.trapping_roofit_v4.evaluate_profile(
+    result = ROOT.trapping_roofit_v5.evaluate_profile(
         _std_vector(x_vec),
         _std_vector(_configuration_values(config)),
         int(options.get("steps_per_active_region", 400)),
         int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
         bool(config["parameters"]["EF_BiasVoltage"].get("enabled", False)),
+        _field_model_kind(config),
     )
     return _profile_result_to_dict(result)
 
@@ -659,12 +752,21 @@ def _make_roofit_parameters(ROOT, config):
     return variables, parameter_list, fit_names, bound_by_name, constraint_indices, constraint_means, constraint_sigmas
 
 
-def _current_parameter_values(variables):
+def _current_parameter_values(variables, config=None):
     values = {}
     for name in MODEL_PARAMETER_NAMES:
         values[name] = float(variables[name].getVal())
-    values["EF_CoefC"] = _derived_field_constant(values)
-    values["EF_BiasVoltage"] = _field_voltage_from_coefficients(values)
+    if config is None:
+        values["EF_CoefC"] = _derived_field_constant(values)
+        values["EF_BiasVoltage"] = _field_voltage_from_coefficients(values)
+    else:
+        _apply_derived_field_values(values, config)
+        if bool(config["parameters"]["EF_BiasVoltage"].get("enabled", False)):
+            model = _canonical_field_model(config["fit_options"].get("field_model", "polynomial"))
+            if model == "double_exponential":
+                values["EF_BiasVoltage"] = _field_voltage_from_double_exponential(values)
+            else:
+                values["EF_BiasVoltage"] = _field_voltage_from_coefficients(values)
     return values
 
 
@@ -778,6 +880,25 @@ def _summary_separator(width=160):
     return "_" * width
 
 
+def _integrated_drift_time_ns(z_values, velocity_values):
+    z_values = np.asarray(z_values, dtype=float)
+    velocity_values = np.asarray(velocity_values, dtype=float)
+    if z_values.shape != velocity_values.shape or z_values.size < 2:
+        return np.nan
+    finite = np.isfinite(z_values) & np.isfinite(velocity_values)
+    if not np.all(finite) or np.any(velocity_values <= 0.0):
+        return np.inf
+    return float(np.trapz(1.0 / velocity_values, z_values))
+
+
+def _format_drift_time(time_ns):
+    if not np.isfinite(time_ns):
+        return "inf"
+    if abs(time_ns) >= 1e3:
+        return f"{time_ns / 1e3:.3g} us"
+    return f"{time_ns:.3g} ns"
+
+
 def _print_fit_summary(output):
     sigfigs = int(output["configuration"]["fit_options"].get("table_sigfigs", 4))
     line = _summary_separator()
@@ -855,12 +976,13 @@ def _print_fit_summary(output):
             bound = bounds.get(name)
             if bound is not None:
                 low, high = bound
-                value = float(output["parameters"][name])
-                scale = max(abs(high - low), 1.0)
-                if abs(value - low) <= 1e-4 * scale:
-                    minos_text = f"{minos_text} [at min]"
-                elif abs(value - high) <= 1e-4 * scale:
-                    minos_text = f"{minos_text} [at max]"
+                if low is not None and high is not None and np.isfinite(low) and np.isfinite(high):
+                    value = float(output["parameters"][name])
+                    scale = max(abs(high - low), 1.0)
+                    if abs(value - low) <= 1e-4 * scale:
+                        minos_text = f"{minos_text} [at min]"
+                    elif abs(value - high) <= 1e-4 * scale:
+                        minos_text = f"{minos_text} [at max]"
         else:
             hesse_text = "--"
             minos_text = "--"
@@ -894,30 +1016,47 @@ def plot_fit_diagnostics(output):
     grid = figure.add_gridspec(3, 3)
     axis_profile = figure.add_subplot(grid[:2, :2])
     axis_residual = figure.add_subplot(grid[2, :2], sharex=axis_profile)
-    axis_velocity = figure.add_subplot(grid[0, 2])
-    axis_response = figure.add_subplot(grid[1, 2])
-    axis_field = figure.add_subplot(grid[2, 2])
+    axis_field = figure.add_subplot(grid[0, 2])
+    axis_velocity = figure.add_subplot(grid[1, 2])
+    axis_response = figure.add_subplot(grid[2, 2])
 
     profile_offset = float(output.get("profile_offset", output.get("y_fit_offset", 0.0)))
     y_data_plot = np.asarray(output["y_data"], dtype=float) - profile_offset
-    y_fit_plot = np.asarray(output["y_fit"], dtype=float) - profile_offset
+    y_fit_data_plot = np.asarray(output["y_fit"], dtype=float) - profile_offset
+    y_fit_plot = y_fit_data_plot
     y_fit_e_plot = np.asarray(output["y_fit_e"], dtype=float)
     y_fit_h_plot = np.asarray(output["y_fit_h"], dtype=float)
+    x_curve = x
+
+    if x.size >= 2 and "configuration" in output and "parameters" in output:
+        dense_size = max(int(x.size) * 10, int(x.size))
+        x_curve = np.linspace(float(np.nanmin(x)), float(np.nanmax(x)), dense_size)
+        curve_config = copy.deepcopy(output["configuration"])
+        for name in MODEL_PARAMETER_NAMES:
+            if name in curve_config["parameters"] and name in output["parameters"]:
+                curve_config["parameters"][name]["value"] = float(output["parameters"][name])
+        try:
+            curve_total, curve_e, curve_h, _, curve_offset, _ = simulate_trapping_model(x_curve, curve_config)
+            y_fit_plot = np.asarray(curve_total, dtype=float) - float(curve_offset)
+            y_fit_e_plot = np.asarray(curve_e, dtype=float)
+            y_fit_h_plot = np.asarray(curve_h, dtype=float)
+        except Exception:
+            x_curve = x
 
     axis_profile.errorbar(
         x, y_data_plot, yerr=output["y_sigma"], fmt="o", ms=3,
         color="black", ecolor="0.6", elinewidth=0.8, capsize=0, label="data",
     )
-    axis_profile.plot(x, y_fit_plot, color="tab:orange", lw=2,
+    axis_profile.plot(x_curve, y_fit_plot, color="tab:orange", lw=2,
                       label=f"fit, chi2/dof = {output['chi2_dof']:.3f}")
-    if y_fit_e_plot.shape == x.shape:
-        axis_profile.plot(x, y_fit_e_plot, color="darkblue", lw=1.5, alpha=0.8, label="e")
-    if y_fit_h_plot.shape == x.shape:
-        axis_profile.plot(x, y_fit_h_plot, color="crimson", lw=1.5, alpha=0.8, label="h")
+    if y_fit_e_plot.shape == x_curve.shape:
+        axis_profile.plot(x_curve, y_fit_e_plot, color="darkblue", lw=1.5, alpha=0.8, label="e")
+    if y_fit_h_plot.shape == x_curve.shape:
+        axis_profile.plot(x_curve, y_fit_h_plot, color="crimson", lw=1.5, alpha=0.8, label="h")
     axis_profile.set(xlabel="focus position z / um", ylabel="charge / NE", title=f"RooFit ID: {output['generation_id']}")
     axis_profile.legend(frameon=False)
 
-    residual = y_data_plot - y_fit_plot
+    residual = y_data_plot - y_fit_data_plot
     axis_residual.errorbar(x, residual, yerr=output["y_sigma"], fmt="o", ms=3, color="black", ecolor="0.6")
     axis_residual.axhline(0.0, color="black", lw=1)
     axis_residual.set(xlabel="focus position z / um", ylabel="data - fit / NE", title="residuals")
@@ -930,11 +1069,29 @@ def plot_fit_diagnostics(output):
     response_h = np.asarray(response.get("response_h", []), dtype=float)
     response_field = np.asarray(response.get("efield", []), dtype=float)
 
+    velocity_positive_values = []
     if response_v_e.shape == response_z.shape:
-        axis_velocity.plot(response_z, response_v_e, color="darkblue", label="e")
+        time_e = _integrated_drift_time_ns(response_z, response_v_e)
+        axis_velocity.plot(
+            response_z, response_v_e, color="darkblue",
+            label=f"e, t={_format_drift_time(time_e)}",
+        )
+        velocity_positive_values.extend(response_v_e[np.isfinite(response_v_e) & (response_v_e > 0.0)])
     if response_v_h.shape == response_z.shape:
-        axis_velocity.plot(response_z, response_v_h, color="crimson", label="h")
-    axis_velocity.set(title="effective drift velocity", xlabel="z / um", ylabel="velocity / (um/ns)")
+        time_h = _integrated_drift_time_ns(response_z, response_v_h)
+        axis_velocity.plot(
+            response_z, response_v_h, color="crimson",
+            label=f"h, t={_format_drift_time(time_h)}",
+        )
+        velocity_positive_values.extend(response_v_h[np.isfinite(response_v_h) & (response_v_h > 0.0)])
+    axis_velocity.set(title="drift velocity", xlabel="z / um", ylabel="velocity / (um/ns)")
+    if velocity_positive_values:
+        velocity_positive_values = np.asarray(velocity_positive_values, dtype=float)
+        axis_velocity.set_yscale("log")
+        axis_velocity.set_ylim(
+            max(float(np.nanmin(velocity_positive_values)) * 0.5, 1e-6),
+            float(np.nanmax(velocity_positive_values)) * 2.0,
+        )
     if axis_velocity.get_legend_handles_labels()[0]:
         axis_velocity.legend(frameon=False)
     if response_total.shape == response_z.shape:
@@ -1125,7 +1282,7 @@ def fit_trapping_model(
     if not fit_names:
         raise ValueError("At least one effective parameter must have type='fit'")
 
-    nll = ROOT.TrappingGaussianNLLV4(
+    nll = ROOT.TrappingGaussianNLLV5(
         "trapping_gaussian_nll",
         "trapping Gaussian NLL",
         parameter_list,
@@ -1138,6 +1295,7 @@ def fit_trapping_model(
         int(options.get("steps_per_active_region", 400)),
         int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
         bool(specs["EF_BiasVoltage"].get("enabled", False)),
+        _field_model_kind(config),
     )
 
     minimizer = ROOT.RooMinimizer(nll)
@@ -1195,7 +1353,7 @@ def fit_trapping_model(
             minos_status_by_parameter[name] = parameter_status
             minos_elapsed_by_parameter[name] = parameter_elapsed
             if parameter_status > 0 and (parameter_status & 8):
-                candidate_values = _current_parameter_values(variables)
+                candidate_values = _current_parameter_values(variables, config)
                 candidate_nll = float(nll.getVal())
                 minos_new_minimum_candidates[name] = {
                     "nll": candidate_nll,
@@ -1263,15 +1421,16 @@ def fit_trapping_model(
         return refit_output
     fit_result = minimizer.save()
 
-    parameters = _current_parameter_values(variables)
+    parameters = _current_parameter_values(variables, config)
     parameters["_EF_BiasVoltage_enabled"] = True
 
-    profile = ROOT.trapping_roofit_v4.evaluate_profile(
+    profile = ROOT.trapping_roofit_v5.evaluate_profile(
         _std_vector(x),
         _std_vector([parameters[name] for name in MODEL_PARAMETER_NAMES]),
         int(options.get("steps_per_active_region", 400)),
         int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
         bool(specs["EF_BiasVoltage"].get("enabled", False)),
+        _field_model_kind(config),
     )
     y_fit, y_fit_e, y_fit_h, y_fit_no_offset, y_fit_offset, response = _profile_result_to_dict(profile)
     chi2 = float(np.sum(((y_fit - data) / sigma) ** 2))

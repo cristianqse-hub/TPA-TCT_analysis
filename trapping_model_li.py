@@ -20,12 +20,20 @@ except ImportError:
 trapz = getattr(np, "trapezoid", np.trapz)
 DEFAULT_N_Z_GRID = 20001
 
+DOUBLE_EXP_FIELD_DEFAULT_PARAMETERS = {
+    "EF_ExpAmpLeft": {"type": "fixed", "value": 1.0},
+    "EF_ExpDecayLeft": {"type": "fixed", "value": 10.0},
+    "EF_ExpAmpRight": {"type": "fixed", "value": 1.0},
+    "EF_ExpDecayRight": {"type": "fixed", "value": 10.0},
+}
+
 MODEL_PARAMETER_NAMES = (
     "BM_z0", "BM_zRight", "BM_zR0", "BM_z_Aberr",
     "BM_CoefA", "BM_CoefB", "BM_area", "BM_scaleAmp", "BM_scaleOffset",
     "MV_beta_e", "MV_vsat_e", "MV_mu0_e",
     "MV_beta_h", "MV_vsat_h", "MV_mu0_h",
     "EF_BiasVoltage", "EF_CoefA", "EF_CoefB", "EF_CoefC", "EF_z0",
+    "EF_ExpAmpLeft", "EF_ExpDecayLeft", "EF_ExpAmpRight", "EF_ExpDecayRight",
     "SC_scaleAmp", "TR_tau_e", "TR_tau_h", "SC_scaleOffset", "SC_scale_zShift",
 )
 
@@ -50,6 +58,10 @@ PARAMETER_UNITS = {
     "EF_CoefB": "V/µm²",
     "EF_CoefC": "V/µm",
     "EF_z0": "µm",
+    "EF_ExpAmpLeft": "V/µm",
+    "EF_ExpDecayLeft": "µm",
+    "EF_ExpAmpRight": "V/µm",
+    "EF_ExpDecayRight": "µm",
     "SC_scaleAmp": "adim.",
     "TR_tau_e": "ns",
     "TR_tau_h": "ns",
@@ -1121,6 +1133,8 @@ def load_fit_configuration(configuration):
     raw_parameters = config.get("parameters")
     if not isinstance(raw_parameters, dict):
         raise ValueError("configuration must contain a 'parameters' dictionary")
+    for name, default_spec in DOUBLE_EXP_FIELD_DEFAULT_PARAMETERS.items():
+        raw_parameters.setdefault(name, dict(default_spec))
     missing = [name for name in MODEL_PARAMETER_NAMES if name not in raw_parameters]
     unknown = [name for name in raw_parameters if name not in MODEL_PARAMETER_NAMES]
     if missing:

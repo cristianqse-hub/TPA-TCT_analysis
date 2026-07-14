@@ -43,6 +43,10 @@
         "value": -2.561761988852449
       },
       "BM_zR0": {
+        "constraint": {
+          "mean": 4.385374879802671,
+          "sigma": 0.099030703645953
+        },
         "type": "fixed",
         "value": 4.385374879802671
       },
@@ -57,19 +61,19 @@
       "EF_BiasVoltage": {
         "enabled": true,
         "type": "fixed",
-        "value": 1170.0044362760632
+        "value": 850.0
       },
       "EF_CoefA": {
         "max": 1.1,
         "min": -1.1,
         "type": "fit",
-        "value": 0.06279020639246258
+        "value": 0.06559984789910667
       },
       "EF_CoefB": {
         "max": 2.5,
         "min": -2.5,
         "type": "fit",
-        "value": 1.6809882318421026
+        "value": 1.5908802839216678
       },
       "EF_CoefC": {
         "type": "fit",
@@ -78,8 +82,8 @@
       "EF_z0": {
         "max": 100.0,
         "min": -100.0,
-        "type": "fit",
-        "value": 50.739168092612516
+        "type": "fixed",
+        "value": 43.957
       },
       "MV_beta_e": {
         "constraint": {
@@ -133,54 +137,58 @@
         "max": 3.0,
         "min": 0.9,
         "type": "fit",
-        "value": 1.771250818598559
+        "value": 1.506
       },
       "SC_scaleOffset": {
-        "max": 0.05,
-        "min": -0.05,
+        "constraint": {
+          "mean": 0.01,
+          "sigma": 0.01
+        },
         "type": "fit",
-        "value": 0.027056002704015925
+        "value": 0.01
       },
       "SC_scale_zShift": {
-        "max": 6.0,
-        "min": -6.0,
+        "max": 7,
+        "min": 0,
         "type": "fit",
-        "value": 3.0
+        "value": 4.657
       },
       "TR_tau_e": {
         "max": 5.0,
         "min": 0.001,
         "type": "fit",
-        "value": 0.1572946532310877
+        "value": 0.9835
       },
       "TR_tau_h": {
         "max": 1.0,
         "min": 0.001,
         "type": "fit",
-        "value": 0.01
+        "value": 0.03498
       }
     }
   },
   "description": "Interactive RooFit profile control. Updated by interactive_profile_model_sliders.py whenever sliders change.",
   "interactive_state": {
-    "chi2": 954.4192041526703,
-    "chi2_dof": 23.278517174455374,
+    "chi2": 1358.7946631764314,
+    "chi2_dof": 33.14133324820565,
     "dof": 41,
     "source_script": "interactive_profile_model_sliders.py",
     "updated_parameters": {
-      "EF_BiasVoltage": 1170.0044362760632,
-      "EF_CoefA": 0.06279020639246258,
-      "EF_CoefB": 1.6809882318421026,
-      "EF_z0": 50.739168092612516,
-      "SC_scaleAmp": 1.771250818598559,
-      "SC_scaleOffset": 0.027056002704015925,
-      "SC_scale_zShift": 3.0,
-      "TR_tau_e": 0.1572946532310877,
-      "TR_tau_h": 0.01
+      "EF_BiasVoltage": 850.0,
+      "EF_CoefA": 0.06559984789910667,
+      "EF_CoefB": 1.5908802839216678,
+      "EF_z0": 43.957,
+      "SC_scaleAmp": 1.506,
+      "SC_scaleOffset": 0.0038307301054679335,
+      "SC_scale_zShift": 4.657,
+      "TR_tau_e": 0.9835,
+      "TR_tau_h": 0.03498
     }
   },
-  "profile_index": 3,
+  "profile_index": 4,
   "refresh_interval_s": 1.5,
   "residual_sigma_fraction": 0.0175,
-  "rootfilename": "SiC_UVLED/RootFiles/20240704_1310_F2W1_-850V_1mm beam_400nm_LED_3.15_reps3_zscan_baseline_substrated.root"
+  "rootfilename": "SiC_UVLED/RootFiles/20240704_1317_F2W1_-850V_1mm beam_400nm_LED_3.2_reps3_zscan_baseline_substrated.root",
+  "use_profile_file_errors": true,
+  "profile_sigma_floor": 0.005
 }
