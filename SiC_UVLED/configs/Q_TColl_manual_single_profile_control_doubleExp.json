@@ -1,13 +1,32 @@
 {
-  "charge_error_systematic": 0.0,
   "configuration": {
     "fit_options": {
-      "charge_error_systematic": 0.0,
       "constraint_range_sigmas": 10.0,
+      "data_errors": {
+        "charge": {
+          "absolute": 0.0,
+          "systematic": 0.006
+        },
+        "tColl": {
+          "absolute_ns": 0.0,
+          "systematic_ns": 0.2
+        }
+      },
+      "data_selection": {
+        "charge": {
+          "index_max": null,
+          "index_min": null
+        },
+        "tColl": {
+          "index_max": 32,
+          "index_min": 13
+        }
+      },
       "do_useMINOS": false,
       "field_model": "double_exponential",
-      "ignore_compute_WFs": true,
-      "ignore_pulse_duration_fit": true,
+      "generation_method": "dt",
+      "ignore_compute_WFs": false,
+      "ignore_pulse_duration_fit": false,
       "include_tcoll_in_cost": false,
       "minimizer_algorithm": "Minimize",
       "minimizer_type": "Minuit2",
@@ -23,13 +42,15 @@
       "show_roofit_output": false,
       "steps_per_active_region": 400,
       "strategy": 1,
-      "tColl_error_systematic_ns": 0.0,
       "tColl_source_tree": "SignalTPA_best_masked",
       "tColl_threshold_percent": 10,
       "table_sigfigs": 4,
       "waveform_dt_ns": 0.02,
+      "waveform_extra_time_ns": 0.0,
+      "waveform_method": "dt",
       "waveform_store_indices": "auto",
-      "waveform_store_z_step_um": 1.0
+      "waveform_store_z_step_um": 1.0,
+      "waveform_tail_rc_constants": 20.0
     },
     "parameters": {
       "BM_CoefA": {
@@ -211,33 +232,35 @@
       }
     }
   },
-  "description": "Manual Q+TColl double-exponential control. Uses the RooFit charge-profile fit when pulse-duration fitting is ignored.",
+  "description": "Interactive Q+TColl double-exponential profile control. Updated by interactive_q_tcoll_model_sliders_doubleExp.py whenever sliders change.",
   "interactive_state": {
-    "chi2": 386.34570800709724,
-    "chi2_dof": 9.423066048953592,
-    "dof": 41,
+    "chi2_charge_dof": null,
+    "chi2_combined_dof": 10.059220096032377,
+    "chi2_tcoll_dof": null,
     "field_model": "double_exponential",
-    "source_script": "interactive_profile_model_sliders_doubleExp.py",
+    "generation_method": "dt",
+    "source_script": "interactive_q_tcoll_model_sliders_doubleExp.py",
     "updated_parameters": {
       "EF_BiasVoltage": 850.0,
       "EF_ExpAmpLeft": 62.43103273195004,
       "EF_ExpDecayLeft": 5.019618860643831,
       "EF_ExpDecayRight": 4.17407169210982,
-      "SC_scaleAmp": 1.506,
-      "SC_scaleOffset": 0.01,
+      "RC_capacitance_pF": 16.0,
+      "RC_extra_sigma_ns": 0.0,
+      "RC_resistance_ohm": 50.0,
+      "SC_scaleAmp": 1.0,
+      "SC_scaleOffset": 0.016,
       "SC_scale_zShift": 4.657,
-      "TR_tau_e": 0.3851089259723117,
-      "TR_tau_h": 0.06930653623531807
+      "TR_tau_e": 5.0,
+      "TR_tau_h": 0.26
     }
   },
   "profile_index": 4,
   "profile_sigma_floor": 0.0,
   "refresh_interval_s": 1.5,
-  "residual_sigma_fraction": 0.0175,
+  "residual_sigma_fraction": 0.0,
   "rootfilename": "SiC_UVLED/RootFiles/20240704_1317_F2W1_-850V_1mm beam_400nm_LED_3.2_reps3_zscan_baseline_substrated.root",
-  "tColl_error_systematic_ns": 0.0,
   "tColl_source_tree": "SignalTPA_best_masked",
   "tColl_threshold_percent": 10,
-  "template_source": "SiC_UVLED/configs/RooFit_manual_single_profile_control_doubleExp.json",
-  "use_profile_file_errors": true
+  "template_source": "SiC_UVLED/configs/RooFit_manual_single_profile_control_doubleExp.json"
 }

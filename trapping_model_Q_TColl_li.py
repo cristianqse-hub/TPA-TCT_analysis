@@ -5,6 +5,7 @@ import os
 import random
 import re
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -17,6 +18,8 @@ import trapping_model_li as _base
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 MODEL_PARAMETER_NAMES = _base.MODEL_PARAMETER_NAMES
+Q_TCOLL_EXTRA_PARAMETER_NAMES = ("RC_capacitance_pF", "RC_resistance_ohm", "RC_extra_sigma_ns")
+SUMMARY_PARAMETER_NAMES = tuple(MODEL_PARAMETER_NAMES) + Q_TCOLL_EXTRA_PARAMETER_NAMES
 PARAMETER_UNITS = _base.PARAMETER_UNITS
 DEFAULT_N_Z_GRID = _base.DEFAULT_N_Z_GRID
 
@@ -136,6 +139,64 @@ def _field_model_kind(config):
     return 1 if _canonical_field_model(config["fit_options"].get("field_model", "polynomial")) == "double_exponential" else 0
 
 
+def _waveform_method_kind(config):
+    method = str(config.get("fit_options", {}).get("waveform_method", "dt")).strip().lower()
+    aliases = {
+        "dt": 0,
+        "time": 0,
+        "time_bin": 0,
+        "timebin": 0,
+        "dz": 1,
+        "space": 1,
+        "z": 1,
+    }
+    if method not in aliases:
+        raise ValueError("fit_options['waveform_method'] must be 'dt' or 'dz'")
+    return aliases[method]
+
+
+def _generation_method(config):
+    options = config.get("fit_options", {})
+    method = str(options.get("generation_method", options.get("waveform_method", "dt"))).strip().lower()
+    aliases = {
+        "direct": "direct",
+        "old_direct": "direct",
+        "profile": "direct",
+        "profile_direct": "direct",
+        "none": "direct",
+        "dt": "dt",
+        "time": "dt",
+        "time_bin": "dt",
+        "timebin": "dt",
+        "dz": "dz",
+        "space": "dz",
+        "z": "dz",
+    }
+    if method not in aliases:
+        raise ValueError("generation/waveform method must be 'direct', 'dt' or 'dz'")
+    return aliases[method]
+
+
+def _normalize_waveform_methods(methods):
+    if methods is None:
+        return []
+    if isinstance(methods, str):
+        text = methods.strip()
+        if not text:
+            return []
+        parts = re.split(r"[\s,;+|]+", text)
+    else:
+        parts = list(methods)
+    normalized = []
+    for item in parts:
+        if str(item).strip() == "":
+            continue
+        canonical = _generation_method({"fit_options": {"generation_method": item}})
+        if canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
+
 def _std_vector(values):
     import ROOT
 
@@ -182,6 +243,37 @@ def _json_ready(value):
     if isinstance(value, float):
         return value if np.isfinite(value) else None
     return value
+
+
+def _clean_configuration_for_json(configuration):
+    config = copy.deepcopy(configuration)
+    options = config.setdefault("fit_options", {})
+    data_errors = options.get("data_errors")
+    if isinstance(data_errors, dict):
+        for key in (
+            "charge_error_absolute",
+            "charge_error_systematic",
+            "tColl_error_absolute_ns",
+            "tColl_error_systematic_ns",
+        ):
+            options.pop(key, None)
+    return config
+
+
+def _data_tuple_to_dict(data):
+    if data is None:
+        return None
+    x, y, sigma = data
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    sigma = np.asarray([] if sigma is None else sigma, dtype=float)
+    if x.size == 0:
+        return {"x": [], "y": [], "sigma": []}
+    if y.shape != x.shape:
+        raise ValueError("masked data x and y must have equal shape")
+    if sigma.size and sigma.shape != x.shape:
+        raise ValueError("masked data sigma must be empty or have the same shape as x")
+    return {"x": x, "y": y, "sigma": sigma}
 
 
 def _compile_cpp_model():
@@ -513,6 +605,9 @@ inline double threshold_duration(
 
     std::size_t right1 = peak_index;
     while (right1 + 1 < y.size() && y[right1] > level) ++right1;
+    if (right1 + 1 >= y.size() && y[right1] > level) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
     std::size_t right0 = right1 > peak_index ? right1 - 1 : right1;
 
     auto crossing = [&](std::size_t i0, std::size_t i1) {
@@ -539,6 +634,40 @@ inline void rc_lowpass_inplace(std::vector<double>& waveform, double dt, double 
     }
 }
 
+inline void add_linear_time_segment(
+    std::vector<double>& waveform,
+    double dt,
+    double t0,
+    double t1,
+    double y0,
+    double y1
+) {
+    if (waveform.empty() || !std::isfinite(dt) || dt <= 0.0) return;
+    if (!std::isfinite(t0) || !std::isfinite(t1) || !std::isfinite(y0) || !std::isfinite(y1)) return;
+    const int n = static_cast<int>(waveform.size());
+    if (t1 <= t0) {
+        const int index = static_cast<int>(std::floor(t0 / dt));
+        if (index >= 0 && index < static_cast<int>(waveform.size())) waveform[index] += y0;
+        return;
+    }
+    int i0 = std::max(0, static_cast<int>(std::floor(t0 / dt)));
+    int i1 = std::min(n - 1, static_cast<int>(std::ceil(t1 / dt)) - 1);
+    if (i0 >= n || i1 < 0) return;
+    if (i1 < i0) return;
+    const double slope = (y1 - y0) / (t1 - t0);
+    for (int i = i0; i <= i1; ++i) {
+        const double bin_left = static_cast<double>(i) * dt;
+        const double bin_right = bin_left + dt;
+        const double a = std::max(t0, bin_left);
+        const double b = std::min(t1, bin_right);
+        if (b <= a) continue;
+        const double ua = a - t0;
+        const double ub = b - t0;
+        const double area = y0 * (b - a) + 0.5 * slope * (ub * ub - ua * ua);
+        waveform[i] += area / dt;
+    }
+}
+
 std::vector<double> evaluate_tcoll_profile(
     const std::vector<double>& x_values,
     const std::vector<double>& p,
@@ -549,7 +678,10 @@ std::vector<double> evaluate_tcoll_profile(
     double waveform_dt,
     double threshold_percent,
     double rc_tau,
-    bool ignore_compute_wfs
+    double waveform_tail_rc_constants,
+    double waveform_extra_time,
+    bool ignore_compute_wfs,
+    int waveform_method_kind
 ) {
     std::vector<double> tcoll(x_values.size(), 1.0);
     if (ignore_compute_wfs) return tcoll;
@@ -585,7 +717,9 @@ std::vector<double> evaluate_tcoll_profile(
         if (std::isfinite(te)) max_drift_time = std::max(max_drift_time, te);
         if (std::isfinite(th)) max_drift_time = std::max(max_drift_time, th);
     }
-    const double t_max = max_drift_time + 8.0 * std::max(rc_tau, 0.0) + 5.0 * waveform_dt;
+    const double tail_constants = std::max(waveform_tail_rc_constants, 0.0);
+    const double extra_time = std::max(waveform_extra_time, 0.0);
+    const double t_max = max_drift_time + tail_constants * std::max(rc_tau, 0.0) + extra_time + 5.0 * waveform_dt;
     const int n_time = std::max(8, static_cast<int>(std::ceil(t_max / waveform_dt)) + 1);
     if (n_time > 200000) {
         tcoll.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
@@ -636,10 +770,17 @@ std::vector<double> evaluate_tcoll_profile(
                 const double v_mid = 0.5 * (base.vdrift_mue[seg] + base.vdrift_mue[seg + 1]);
                 if (!std::isfinite(v_mid) || v_mid <= 0.0) break;
                 const double dt_seg = dz_active / v_mid;
-                const double t_mid = t_elapsed + 0.5 * dt_seg;
-                const int index = static_cast<int>(std::floor(t_mid / waveform_dt));
-                if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width;
-                survival *= (std::isfinite(p[TR_tau_e]) && p[TR_tau_e] > 0.0) ? std::exp(-dt_seg / p[TR_tau_e]) : 0.0;
+                const double survival_next = (std::isfinite(p[TR_tau_e]) && p[TR_tau_e] > 0.0) ? survival * std::exp(-dt_seg / p[TR_tau_e]) : 0.0;
+                if (waveform_method_kind == 1) {
+                    const double y0 = weight * survival * base.vdrift_mue[seg] / width;
+                    const double y1 = weight * survival_next * base.vdrift_mue[seg + 1] / width;
+                    add_linear_time_segment(waveform, waveform_dt, t_elapsed, t_elapsed + dt_seg, y0, y1);
+                } else {
+                    const double t_mid = t_elapsed + 0.5 * dt_seg;
+                    const int index = static_cast<int>(std::floor(t_mid / waveform_dt));
+                    if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width * dt_seg / waveform_dt;
+                }
+                survival = survival_next;
                 t_elapsed += dt_seg;
                 if (survival <= 0.0) break;
             }
@@ -650,10 +791,17 @@ std::vector<double> evaluate_tcoll_profile(
                 const double v_mid = 0.5 * (base.vdrift_muh[seg] + base.vdrift_muh[seg + 1]);
                 if (!std::isfinite(v_mid) || v_mid <= 0.0) break;
                 const double dt_seg = dz_active / v_mid;
-                const double t_mid = t_elapsed + 0.5 * dt_seg;
-                const int index = static_cast<int>(std::floor(t_mid / waveform_dt));
-                if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width;
-                survival *= (std::isfinite(p[TR_tau_h]) && p[TR_tau_h] > 0.0) ? std::exp(-dt_seg / p[TR_tau_h]) : 0.0;
+                const double survival_next = (std::isfinite(p[TR_tau_h]) && p[TR_tau_h] > 0.0) ? survival * std::exp(-dt_seg / p[TR_tau_h]) : 0.0;
+                if (waveform_method_kind == 1) {
+                    const double y0 = weight * survival * base.vdrift_muh[seg + 1] / width;
+                    const double y1 = weight * survival_next * base.vdrift_muh[seg] / width;
+                    add_linear_time_segment(waveform, waveform_dt, t_elapsed, t_elapsed + dt_seg, y0, y1);
+                } else {
+                    const double t_mid = t_elapsed + 0.5 * dt_seg;
+                    const int index = static_cast<int>(std::floor(t_mid / waveform_dt));
+                    if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width * dt_seg / waveform_dt;
+                }
+                survival = survival_next;
                 t_elapsed += dt_seg;
                 if (survival <= 0.0) break;
             }
@@ -668,11 +816,85 @@ struct WaveformResult {
     std::vector<int> indices;
     std::vector<double> x;
     std::vector<double> time_ns;
+    std::vector<double> electron_flat;
+    std::vector<double> hole_flat;
     std::vector<double> total_flat;
+    std::vector<double> electron_rc_flat;
+    std::vector<double> hole_rc_flat;
     std::vector<double> total_rc_flat;
     int n_time = 0;
     double threshold_percent = 5.0;
 };
+
+struct WaveformChargeProfileResult {
+    std::vector<double> charge_e_before_rc;
+    std::vector<double> charge_h_before_rc;
+    std::vector<double> charge_before_rc;
+    std::vector<double> charge_e_after_rc;
+    std::vector<double> charge_h_after_rc;
+    std::vector<double> charge_after_rc;
+};
+
+struct InjectedChargeProfileResult {
+    std::vector<double> charge_injected;
+    std::vector<double> charge_injected_no_offset;
+};
+
+InjectedChargeProfileResult evaluate_injected_charge_profile(
+    const std::vector<double>& x_values,
+    const std::vector<double>& p,
+    int steps_per_active_region,
+    int n_z_grid,
+    bool voltage_enabled,
+    int field_model_kind
+) {
+    InjectedChargeProfileResult out;
+    out.charge_injected.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    out.charge_injected_no_offset.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    if (p.size() < N_PARAMETERS || x_values.empty()) return out;
+
+    const auto base = evaluate_profile(
+        x_values, p, steps_per_active_region, n_z_grid, voltage_enabled, field_model_kind
+    );
+    if (base.z.size() < 2) return out;
+
+    const int steps = static_cast<int>(base.z.size());
+    const int nz = std::max(n_z_grid, 2);
+    const double dz_active = p[BM_zRight] / static_cast<double>(steps - 1);
+    const auto xminmax = std::minmax_element(x_values.begin(), x_values.end());
+    const double z_grid_min = *xminmax.first - 100.0;
+    const double z_grid_max = *xminmax.second + 500.0;
+    const double dz_grid = (z_grid_max - z_grid_min) / static_cast<double>(nz - 1);
+    const double offset = p[BM_scaleOffset] + p[SC_scaleOffset];
+
+    std::vector<double> amplitude(nz), density(nz), generated_on_active(steps);
+    for (std::size_t ix = 0; ix < x_values.size(); ++ix) {
+        const double zc = x_values[ix];
+        const double zR = zR_aberracion_esferica(
+            zc, p[BM_zR0], p[BM_z_Aberr] + p[SC_scale_zShift], p[BM_CoefA], p[BM_CoefB]
+        );
+        for (int iz = 0; iz < nz; ++iz) {
+            const double z = z_grid_min + dz_grid * static_cast<double>(iz);
+            const double scaled = (z - zc) / zR;
+            const double intensity = 1.0 / (1.0 + scaled * scaled);
+            amplitude[iz] = std::sqrt(std::max(intensity, 1e-15));
+        }
+        const double area_amplitude = trapezoid(amplitude, dz_grid);
+        if (!std::isfinite(area_amplitude) || area_amplitude <= 0.0) continue;
+        const double norm = p[BM_area] / area_amplitude;
+        for (int iz = 0; iz < nz; ++iz) {
+            const double amp = norm * amplitude[iz];
+            density[iz] = amp * amp;
+        }
+        for (int ia = 0; ia < steps; ++ia) {
+            generated_on_active[ia] = interp_uniform(density, z_grid_min, dz_grid, base.z[ia]) * p[SC_scaleAmp];
+        }
+        const double injected_integral = trapezoid(generated_on_active, dz_active);
+        out.charge_injected_no_offset[ix] = p[BM_scaleAmp] * injected_integral;
+        out.charge_injected[ix] = offset + out.charge_injected_no_offset[ix];
+    }
+    return out;
+}
 
 WaveformResult evaluate_waveforms_for_indices(
     const std::vector<double>& x_values,
@@ -684,7 +906,10 @@ WaveformResult evaluate_waveforms_for_indices(
     int field_model_kind,
     double waveform_dt,
     double threshold_percent,
-    double rc_tau
+    double rc_tau,
+    double waveform_tail_rc_constants,
+    double waveform_extra_time,
+    int waveform_method_kind
 ) {
     WaveformResult out;
     out.threshold_percent = threshold_percent;
@@ -713,7 +938,9 @@ WaveformResult evaluate_waveforms_for_indices(
         if (std::isfinite(te)) max_drift_time = std::max(max_drift_time, te);
         if (std::isfinite(th)) max_drift_time = std::max(max_drift_time, th);
     }
-    const double t_max = max_drift_time + 8.0 * std::max(rc_tau, 0.0) + 5.0 * waveform_dt;
+    const double tail_constants = std::max(waveform_tail_rc_constants, 0.0);
+    const double extra_time = std::max(waveform_extra_time, 0.0);
+    const double t_max = max_drift_time + tail_constants * std::max(rc_tau, 0.0) + extra_time + 5.0 * waveform_dt;
     const int n_time = std::max(8, static_cast<int>(std::ceil(t_max / waveform_dt)) + 1);
     if (n_time > 200000) return out;
     out.n_time = n_time;
@@ -725,7 +952,8 @@ WaveformResult evaluate_waveforms_for_indices(
     const double z_grid_max = *xminmax.second + 500.0;
     const double dz_grid = (z_grid_max - z_grid_min) / static_cast<double>(nz - 1);
     std::vector<double> amplitude(nz), density(nz), generated_on_active(steps);
-    std::vector<double> waveform(n_time), waveform_rc(n_time);
+    std::vector<double> waveform_e(n_time), waveform_h(n_time), waveform(n_time);
+    std::vector<double> waveform_e_rc(n_time), waveform_h_rc(n_time), waveform_rc(n_time);
 
     for (int requested : requested_indices) {
         if (requested < 0 || requested >= static_cast<int>(x_values.size())) continue;
@@ -748,7 +976,8 @@ WaveformResult evaluate_waveforms_for_indices(
             generated_on_active[ia] = interp_uniform(density, z_grid_min, dz_grid, base.z[ia]) * p[SC_scaleAmp];
         }
 
-        std::fill(waveform.begin(), waveform.end(), 0.0);
+        std::fill(waveform_e.begin(), waveform_e.end(), 0.0);
+        std::fill(waveform_h.begin(), waveform_h.end(), 0.0);
         for (int start = 0; start < steps; ++start) {
             double weight = generated_on_active[start] * dz_active;
             if (start == 0 || start + 1 == steps) weight *= 0.5;
@@ -760,9 +989,16 @@ WaveformResult evaluate_waveforms_for_indices(
                 const double v_mid = 0.5 * (base.vdrift_mue[seg] + base.vdrift_mue[seg + 1]);
                 if (!std::isfinite(v_mid) || v_mid <= 0.0) break;
                 const double dt_seg = dz_active / v_mid;
-                const int index = static_cast<int>(std::floor((t_elapsed + 0.5 * dt_seg) / waveform_dt));
-                if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width;
-                survival *= (std::isfinite(p[TR_tau_e]) && p[TR_tau_e] > 0.0) ? std::exp(-dt_seg / p[TR_tau_e]) : 0.0;
+                const double survival_next = (std::isfinite(p[TR_tau_e]) && p[TR_tau_e] > 0.0) ? survival * std::exp(-dt_seg / p[TR_tau_e]) : 0.0;
+                if (waveform_method_kind == 1) {
+                    const double y0 = weight * survival * base.vdrift_mue[seg] / width;
+                    const double y1 = weight * survival_next * base.vdrift_mue[seg + 1] / width;
+                    add_linear_time_segment(waveform_e, waveform_dt, t_elapsed, t_elapsed + dt_seg, y0, y1);
+                } else {
+                    const int index = static_cast<int>(std::floor((t_elapsed + 0.5 * dt_seg) / waveform_dt));
+                    if (index >= 0 && index < n_time) waveform_e[index] += weight * survival * v_mid / width * dt_seg / waveform_dt;
+                }
+                survival = survival_next;
                 t_elapsed += dt_seg;
                 if (survival <= 0.0) break;
             }
@@ -773,19 +1009,105 @@ WaveformResult evaluate_waveforms_for_indices(
                 const double v_mid = 0.5 * (base.vdrift_muh[seg] + base.vdrift_muh[seg + 1]);
                 if (!std::isfinite(v_mid) || v_mid <= 0.0) break;
                 const double dt_seg = dz_active / v_mid;
-                const int index = static_cast<int>(std::floor((t_elapsed + 0.5 * dt_seg) / waveform_dt));
-                if (index >= 0 && index < n_time) waveform[index] += weight * survival * v_mid / width;
-                survival *= (std::isfinite(p[TR_tau_h]) && p[TR_tau_h] > 0.0) ? std::exp(-dt_seg / p[TR_tau_h]) : 0.0;
+                const double survival_next = (std::isfinite(p[TR_tau_h]) && p[TR_tau_h] > 0.0) ? survival * std::exp(-dt_seg / p[TR_tau_h]) : 0.0;
+                if (waveform_method_kind == 1) {
+                    const double y0 = weight * survival * base.vdrift_muh[seg + 1] / width;
+                    const double y1 = weight * survival_next * base.vdrift_muh[seg] / width;
+                    add_linear_time_segment(waveform_h, waveform_dt, t_elapsed, t_elapsed + dt_seg, y0, y1);
+                } else {
+                    const int index = static_cast<int>(std::floor((t_elapsed + 0.5 * dt_seg) / waveform_dt));
+                    if (index >= 0 && index < n_time) waveform_h[index] += weight * survival * v_mid / width * dt_seg / waveform_dt;
+                }
+                survival = survival_next;
                 t_elapsed += dt_seg;
                 if (survival <= 0.0) break;
             }
         }
-        waveform_rc = waveform;
-        rc_lowpass_inplace(waveform_rc, waveform_dt, rc_tau);
+        for (int it = 0; it < n_time; ++it) waveform[it] = waveform_e[it] + waveform_h[it];
+        waveform_e_rc = waveform_e;
+        waveform_h_rc = waveform_h;
+        rc_lowpass_inplace(waveform_e_rc, waveform_dt, rc_tau);
+        rc_lowpass_inplace(waveform_h_rc, waveform_dt, rc_tau);
+        for (int it = 0; it < n_time; ++it) waveform_rc[it] = waveform_e_rc[it] + waveform_h_rc[it];
         out.indices.push_back(requested);
         out.x.push_back(zc);
+        out.electron_flat.insert(out.electron_flat.end(), waveform_e.begin(), waveform_e.end());
+        out.hole_flat.insert(out.hole_flat.end(), waveform_h.begin(), waveform_h.end());
         out.total_flat.insert(out.total_flat.end(), waveform.begin(), waveform.end());
+        out.electron_rc_flat.insert(out.electron_rc_flat.end(), waveform_e_rc.begin(), waveform_e_rc.end());
+        out.hole_rc_flat.insert(out.hole_rc_flat.end(), waveform_h_rc.begin(), waveform_h_rc.end());
         out.total_rc_flat.insert(out.total_rc_flat.end(), waveform_rc.begin(), waveform_rc.end());
+    }
+    return out;
+}
+
+WaveformChargeProfileResult evaluate_waveform_charge_profile(
+    const std::vector<double>& x_values,
+    const std::vector<double>& p,
+    int steps_per_active_region,
+    int n_z_grid,
+    bool voltage_enabled,
+    int field_model_kind,
+    double waveform_dt,
+    double threshold_percent,
+    double rc_tau,
+    double waveform_tail_rc_constants,
+    double waveform_extra_time,
+    int waveform_method_kind
+) {
+    WaveformChargeProfileResult out;
+    out.charge_e_before_rc.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    out.charge_h_before_rc.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    out.charge_before_rc.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    out.charge_e_after_rc.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    out.charge_h_after_rc.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    out.charge_after_rc.assign(x_values.size(), std::numeric_limits<double>::quiet_NaN());
+    if (x_values.empty()) return out;
+
+    std::vector<int> indices(x_values.size());
+    for (std::size_t i = 0; i < x_values.size(); ++i) indices[i] = static_cast<int>(i);
+    const auto waveforms = evaluate_waveforms_for_indices(
+        x_values, indices, p, steps_per_active_region, n_z_grid, voltage_enabled, field_model_kind,
+        waveform_dt, threshold_percent, rc_tau, waveform_tail_rc_constants, waveform_extra_time, waveform_method_kind
+    );
+    const int n_time = waveforms.n_time;
+    if (n_time <= 0) return out;
+    const double offset = p[BM_scaleOffset] + p[SC_scaleOffset];
+    for (std::size_t j = 0; j < waveforms.indices.size(); ++j) {
+        const int index = waveforms.indices[j];
+        if (index < 0 || index >= static_cast<int>(x_values.size())) continue;
+        const std::size_t start = j * static_cast<std::size_t>(n_time);
+        if (start + static_cast<std::size_t>(n_time) > waveforms.total_flat.size()) continue;
+        if (start + static_cast<std::size_t>(n_time) > waveforms.electron_flat.size()) continue;
+        if (start + static_cast<std::size_t>(n_time) > waveforms.hole_flat.size()) continue;
+        if (start + static_cast<std::size_t>(n_time) > waveforms.electron_rc_flat.size()) continue;
+        if (start + static_cast<std::size_t>(n_time) > waveforms.hole_rc_flat.size()) continue;
+        double integral_e_before = 0.0;
+        double integral_h_before = 0.0;
+        double integral_before = 0.0;
+        double integral_e_after = 0.0;
+        double integral_h_after = 0.0;
+        double integral_after = 0.0;
+        for (int it = 0; it < n_time; ++it) {
+            integral_e_before += waveforms.electron_flat[start + it];
+            integral_h_before += waveforms.hole_flat[start + it];
+            integral_before += waveforms.total_flat[start + it];
+            integral_e_after += waveforms.electron_rc_flat[start + it];
+            integral_h_after += waveforms.hole_rc_flat[start + it];
+            integral_after += waveforms.total_rc_flat[start + it];
+        }
+        integral_e_before *= waveform_dt;
+        integral_h_before *= waveform_dt;
+        integral_before *= waveform_dt;
+        integral_e_after *= waveform_dt;
+        integral_h_after *= waveform_dt;
+        integral_after *= waveform_dt;
+        out.charge_e_before_rc[index] = p[BM_scaleAmp] * integral_e_before;
+        out.charge_h_before_rc[index] = p[BM_scaleAmp] * integral_h_before;
+        out.charge_before_rc[index] = offset + p[BM_scaleAmp] * integral_before;
+        out.charge_e_after_rc[index] = p[BM_scaleAmp] * integral_e_after;
+        out.charge_h_after_rc[index] = p[BM_scaleAmp] * integral_h_after;
+        out.charge_after_rc[index] = offset + p[BM_scaleAmp] * integral_after;
     }
     return out;
 }
@@ -918,7 +1240,10 @@ public:
         bool ignore_compute_wfs,
         double waveform_dt,
         double threshold_percent,
-        double rc_tau
+        double rc_tau,
+        double waveform_tail_rc_constants,
+        double waveform_extra_time,
+        int waveform_method_kind
     )
         : RooAbsReal(name, title),
           parameters_("parameters", "parameters", this),
@@ -939,7 +1264,10 @@ public:
           ignore_compute_wfs_(ignore_compute_wfs),
           waveform_dt_(waveform_dt),
           threshold_percent_(threshold_percent),
-          rc_tau_(rc_tau)
+          rc_tau_(rc_tau),
+          waveform_tail_rc_constants_(waveform_tail_rc_constants),
+          waveform_extra_time_(waveform_extra_time),
+          waveform_method_kind_(waveform_method_kind)
     {
         parameters_.add(parameters);
     }
@@ -964,7 +1292,10 @@ public:
           ignore_compute_wfs_(other.ignore_compute_wfs_),
           waveform_dt_(other.waveform_dt_),
           threshold_percent_(other.threshold_percent_),
-          rc_tau_(other.rc_tau_)
+          rc_tau_(other.rc_tau_),
+          waveform_tail_rc_constants_(other.waveform_tail_rc_constants_),
+          waveform_extra_time_(other.waveform_extra_time_),
+          waveform_method_kind_(other.waveform_method_kind_)
     {}
 
     TObject* clone(const char* newname) const override { return new TrappingQTCollGaussianNLLV1(*this, newname); }
@@ -982,12 +1313,22 @@ protected:
         constexpr double log_sqrt_2pi = 0.91893853320467274178;
         double nll = 0.0;
 
-        const auto profile = trapping_roofit_v5::evaluate_profile(
-            x_q_, p, steps_per_active_region_, n_z_grid_, voltage_enabled_, field_model_kind_
-        );
-        if (profile.total.size() != y_q_.size()) return 1e100;
+        std::vector<double> q_model;
+        if (ignore_compute_wfs_) {
+            const auto profile = trapping_roofit_v5::evaluate_profile(
+                x_q_, p, steps_per_active_region_, n_z_grid_, voltage_enabled_, field_model_kind_
+            );
+            q_model = profile.total;
+        } else {
+            const auto wf_charge = trapping_roofit_v5::evaluate_waveform_charge_profile(
+                x_q_, p, steps_per_active_region_, n_z_grid_, voltage_enabled_, field_model_kind_,
+                waveform_dt_, threshold_percent_, rc_tau_, waveform_tail_rc_constants_, waveform_extra_time_, waveform_method_kind_
+            );
+            q_model = wf_charge.charge_before_rc;
+        }
+        if (q_model.size() != y_q_.size()) return 1e100;
         for (std::size_t i = 0; i < y_q_.size(); ++i) {
-            const double model = profile.total[i];
+            const double model = q_model[i];
             const double sigma = sigma_q_[i];
             if (!std::isfinite(model) || !std::isfinite(sigma) || sigma <= 0.0) return 1e100;
             const double pull = (y_q_[i] - model) / sigma;
@@ -997,7 +1338,8 @@ protected:
         if (include_tcoll_) {
             const auto tcoll = trapping_roofit_v5::evaluate_tcoll_profile(
                 x_t_, p, steps_per_active_region_, n_z_grid_, voltage_enabled_, field_model_kind_,
-                waveform_dt_, threshold_percent_, rc_tau_, ignore_compute_wfs_
+                waveform_dt_, threshold_percent_, rc_tau_, waveform_tail_rc_constants_, waveform_extra_time_,
+                ignore_compute_wfs_, waveform_method_kind_
             );
             if (tcoll.size() != y_t_.size()) return 1e100;
             for (std::size_t i = 0; i < y_t_.size(); ++i) {
@@ -1040,6 +1382,9 @@ private:
     double waveform_dt_ = 0.02;
     double threshold_percent_ = 5.0;
     double rc_tau_ = 1.6;
+    double waveform_tail_rc_constants_ = 20.0;
+    double waveform_extra_time_ = 0.0;
+    int waveform_method_kind_ = 0;
 };
         '''
     )
@@ -1151,6 +1496,8 @@ def _profile_result_to_dict(result):
         "pulse_duration_h_intrinsic": _to_numpy(result.pulse_duration_h_intrinsic),
         "pulse_duration_intrinsic": _to_numpy(result.pulse_duration_intrinsic),
     }
+    response["vdrift_e"] = response["vdrift_mue"]
+    response["vdrift_h"] = response["vdrift_muh"]
     return (
         _to_numpy(result.total),
         _to_numpy(result.electron),
@@ -1440,7 +1787,8 @@ def _print_fit_summary(output):
         name for name in output["fit_names"]
         if output["configuration"]["parameters"][name].get("constraint") is not None
     ]
-    fixed_names = [name for name in MODEL_PARAMETER_NAMES if name not in fit_index]
+    summary_names = [name for name in SUMMARY_PARAMETER_NAMES if name in output["configuration"]["parameters"]]
+    fixed_names = [name for name in summary_names if name not in fit_index]
     ordered_names = fit_names + cstr_names + fixed_names
     cstr_separator_printed = False
     fixed_separator_printed = False
@@ -1665,7 +2013,8 @@ def _save_fit_result(output, output_dir):
             "timings": output["timings"],
             "refit_fromLocalMinimumMINOS": output["refit_fromLocalMinimumMINOS"],
         },
-        "configuration": output["configuration"],
+        "q_tcoll_fit_options": output.get("q_tcoll_fit_options"),
+        "configuration": _clean_configuration_for_json(output["configuration"]),
         "initial_parameters": output["initial_parameters"],
         "real_parameters": output["real_parameters"],
         "final_parameters": output["parameters"],
@@ -1682,6 +2031,11 @@ def _save_fit_result(output, output_dir):
             "y_data": np.asarray(output["y_data"], dtype=float).tolist(),
             "y_sigma": np.asarray(output["y_sigma"], dtype=float).tolist(),
             "y_sigma_supplied": bool(output["y_sigma_supplied"]),
+            "x_tcoll": np.asarray(output.get("x_tcoll", []), dtype=float).tolist(),
+            "y_tcoll_data": np.asarray(output.get("y_tcoll_data", []), dtype=float).tolist(),
+            "y_tcoll_sigma": np.asarray(output.get("y_tcoll_sigma", []), dtype=float).tolist(),
+            "masked_charge": output.get("masked_data", {}).get("charge"),
+            "masked_tcoll": output.get("masked_data", {}).get("tColl"),
         },
         "model_curves": {
             "y_fit": np.asarray(output["y_fit"], dtype=float).tolist(),
@@ -1690,6 +2044,10 @@ def _save_fit_result(output, output_dir):
             "y_fit_no_offset": np.asarray(output["y_fit_no_offset"], dtype=float).tolist(),
             "y_fit_offset": float(output["y_fit_offset"]),
             "profile_offset": float(output["profile_offset"]),
+            "y_tcoll_fit": np.asarray(output.get("y_tcoll_fit", []), dtype=float).tolist(),
+            "y_fit_direct": np.asarray(output.get("y_fit_direct", []), dtype=float).tolist(),
+            "y_fit_e_direct": np.asarray(output.get("y_fit_e_direct", []), dtype=float).tolist(),
+            "y_fit_h_direct": np.asarray(output.get("y_fit_h_direct", []), dtype=float).tolist(),
         },
         "material_response": output["material_response"],
         "minos_new_minimum_candidates": output["minos_new_minimum_candidates"],
@@ -1697,6 +2055,10 @@ def _save_fit_result(output, output_dir):
             "diagnostic_plot_png": (
                 str(output["diagnostic_plot_path"])
                 if output.get("diagnostic_plot_path") is not None else None
+            ),
+            "q_tcoll_diagnostic_plot_png": (
+                str(output["q_tcoll_diagnostic_plot_path"])
+                if output.get("q_tcoll_diagnostic_plot_path") is not None else None
             ),
             "json": str(json_path),
         },
@@ -1888,10 +2250,10 @@ def fit_trapping_model(
             refit_config,
             y_sigma=sigma,
             show_summary=show_summary,
-            show_fit=show_fit,
+            show_fit=False,
             show_covariance=show_covariance,
             show_correlation=show_correlation,
-            save_results=save_results,
+            save_results=False,
             fit_name=fit_name,
             output_dir=output_dir,
             do_useMINOS=bool(options.get("do_useMINOS", False)),
@@ -2148,7 +2510,7 @@ def multifit_random_initial_profiles(
             show_summary=show_summary,
             show_fit=False,
             show_correlation=show_correlation,
-            save_results=save_results,
+            save_results=False,
             fit_name=f"{fit_name_prefix}_{case_index:04d}",
             output_dir=output_path,
             **fit_kwargs,
@@ -2298,13 +2660,28 @@ def default_configuration() -> dict:
             "n_z_grid": DEFAULT_N_Z_GRID,
             "tColl_threshold_percent": 5.0,
             "waveform_dt_ns": 0.02,
+            "waveform_tail_rc_constants": 20.0,
+            "waveform_extra_time_ns": 0.0,
+            "generation_method": "dt",
+            "waveform_method": "dt",
             "waveform_store_indices": [],
             "waveform_store_z_step_um": 1.0,
+            "data_errors": {
+                "charge": {"absolute": 0.0, "systematic": 0.0},
+                "tColl": {"absolute_ns": 0.0, "systematic_ns": 0.0},
+            },
+            "data_selection": {
+                "charge": {"index_min": None, "index_max": None},
+                "tColl": {"index_min": None, "index_max": None},
+            },
+            "tColl_error_absolute_ns": 0.0,
             "tColl_error_systematic_ns": 0.0,
             "include_tcoll_in_cost": True,
             "ignore_pulse_duration_fit": False,
             "ignore_compute_WFs": False,
             "charge_error_fraction": 0.0175,
+            "charge_error_absolute": 0.0,
+            "charge_error_systematic": 0.0,
             "charge_error_floor": 0.0,
             "pulse_duration_model": "ramo_waveform",
             "rc_model": "first_order_lowpass",
@@ -2327,12 +2704,47 @@ def load_configuration(configuration) -> dict:
     defaults = default_configuration()
     config.setdefault("parameters", {})
     config.setdefault("fit_options", {})
+    had_generation_method = "generation_method" in config["fit_options"]
     for name, spec in defaults["parameters"].items():
         config["parameters"].setdefault(name, copy.deepcopy(spec))
         config["parameters"][name].setdefault("type", spec["type"])
         config["parameters"][name].setdefault("value", spec["value"])
     for name, value in defaults["fit_options"].items():
         config["fit_options"].setdefault(name, value)
+    data_errors = config["fit_options"].get("data_errors")
+    if isinstance(data_errors, dict):
+        charge_errors = data_errors.get("charge", {})
+        tcoll_errors = data_errors.get("tColl", data_errors.get("tcoll", {}))
+        if isinstance(charge_errors, dict):
+            config["fit_options"]["charge_error_absolute"] = float(charge_errors.get("absolute", config["fit_options"].get("charge_error_absolute", 0.0)))
+            config["fit_options"]["charge_error_systematic"] = float(charge_errors.get("systematic", config["fit_options"].get("charge_error_systematic", 0.0)))
+        if isinstance(tcoll_errors, dict):
+            config["fit_options"]["tColl_error_absolute_ns"] = float(tcoll_errors.get("absolute_ns", tcoll_errors.get("absolute", config["fit_options"].get("tColl_error_absolute_ns", 0.0))))
+            config["fit_options"]["tColl_error_systematic_ns"] = float(tcoll_errors.get("systematic_ns", tcoll_errors.get("systematic", config["fit_options"].get("tColl_error_systematic_ns", 0.0))))
+    else:
+        config["fit_options"]["data_errors"] = {
+            "charge": {
+                "absolute": float(config["fit_options"].get("charge_error_absolute", 0.0)),
+                "systematic": float(config["fit_options"].get("charge_error_systematic", 0.0)),
+            },
+            "tColl": {
+                "absolute_ns": float(config["fit_options"].get("tColl_error_absolute_ns", 0.0)),
+                "systematic_ns": float(config["fit_options"].get("tColl_error_systematic_ns", 0.0)),
+            },
+        }
+    selection = config["fit_options"].setdefault("data_selection", {})
+    if not isinstance(selection, dict):
+        selection = {}
+        config["fit_options"]["data_selection"] = selection
+    for dataset_name in ("charge", "tColl"):
+        dataset_selection = selection.setdefault(dataset_name, {})
+        if not isinstance(dataset_selection, dict):
+            dataset_selection = {}
+            selection[dataset_name] = dataset_selection
+        dataset_selection.setdefault("index_min", None)
+        dataset_selection.setdefault("index_max", None)
+    if not had_generation_method:
+        config["fit_options"]["generation_method"] = config["fit_options"].get("waveform_method", "dt")
     config["fit_options"]["field_model"] = canonical_field_model(config["fit_options"].get("field_model", "polynomial"))
     return config
 
@@ -2343,6 +2755,56 @@ def parameter_values(config: dict) -> dict:
     values["_EF_BiasVoltage_enabled"] = bool(cfg["parameters"]["EF_BiasVoltage"].get("enabled", False))
     apply_derived_field_values(values, cfg)
     return values
+
+
+def data_error_options(configuration) -> dict:
+    cfg = load_configuration(configuration)
+    options = cfg.get("fit_options", {})
+    return {
+        "charge": {
+            "absolute": float(options.get("charge_error_absolute", 0.0)),
+            "systematic": float(options.get("charge_error_systematic", 0.0)),
+        },
+        "tColl": {
+            "absolute_ns": float(options.get("tColl_error_absolute_ns", 0.0)),
+            "systematic_ns": float(options.get("tColl_error_systematic_ns", 0.0)),
+        },
+    }
+
+
+def data_selection_options(configuration) -> dict:
+    cfg = load_configuration(configuration)
+    selection = cfg.get("fit_options", {}).get("data_selection", {})
+
+    def clean(dataset):
+        raw = selection.get(dataset, {}) if isinstance(selection, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            "index_min": raw.get("index_min", None),
+            "index_max": raw.get("index_max", None),
+        }
+
+    return {"charge": clean("charge"), "tColl": clean("tColl")}
+
+
+def split_data_by_index_selection(x, y, yerr=None, *, index_min=None, index_max=None):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.ndim != 1 or y.shape != x.shape:
+        raise ValueError("x and y must be one-dimensional arrays with equal shape")
+    sigma = None if yerr is None else np.asarray(yerr, dtype=float)
+    if sigma is not None and sigma.shape != x.shape:
+        raise ValueError("yerr must be None or have the same shape as x")
+    indices = np.arange(x.size)
+    keep = np.ones(x.size, dtype=bool)
+    if index_min is not None:
+        keep &= indices >= int(index_min)
+    if index_max is not None:
+        keep &= indices <= int(index_max)
+    selected = (x[keep], y[keep], None if sigma is None else sigma[keep])
+    masked = (x[~keep], y[~keep], None if sigma is None else sigma[~keep])
+    return selected, masked, keep
 
 
 def canonical_field_model(field_model) -> str:
@@ -2453,6 +2915,7 @@ def get_profile_data_with_errors(
     index: int,
     rootfiles_list,
     normalize_to_1mw2=True,
+    absolute_error=0.0,
     systematic_error=0.0,
     fallback_fraction=0.0175,
     error_branch_candidates=None,
@@ -2495,8 +2958,11 @@ def get_profile_data_with_errors(
         if np.any(invalid):
             yerr[invalid] = fallback[invalid]
 
+    absolute = float(absolute_error)
+    if np.isfinite(absolute) and absolute != 0.0:
+        yerr = yerr + abs(absolute)
     syst = float(systematic_error)
-    if np.isfinite(syst) and syst > 0.0:
+    if np.isfinite(syst) and syst != 0.0:
         yerr = np.sqrt(yerr**2 + syst**2)
     return x, y, yerr, rootfilename, source
 
@@ -2524,7 +2990,15 @@ def average_tcoll_repetitions_from_root(rootfilename, source_tree="SignalTPA_bes
     }
 
 
-def get_tcoll_data(index: int, rootfiles_list, threshold_percent=5, source_tree="SignalTPA_best_masked", error_floor_ns=0.0):
+def get_tcoll_data(
+    index: int,
+    rootfiles_list,
+    threshold_percent=5,
+    source_tree="SignalTPA_best_masked",
+    absolute_error_ns=0.0,
+    systematic_error_ns=0.0,
+    error_floor_ns=None,
+):
     _require_root_helpers()
     rootfiles = list(rootfiles_list)
     rootfilename = str(rootfiles[int(index)])
@@ -2548,9 +3022,14 @@ def get_tcoll_data(index: int, rootfiles_list, threshold_percent=5, source_tree=
         thresholds = averaged["thresholds"]
     ith = int(np.argmin(np.abs(thresholds - float(threshold_percent))))
     yerr = np.asarray(tcoll_err[ith], dtype=float)
-    floor = float(error_floor_ns)
-    if np.isfinite(floor) and floor > 0.0:
-        yerr = np.sqrt(yerr**2 + floor**2)
+    absolute = float(absolute_error_ns)
+    if np.isfinite(absolute) and absolute != 0.0:
+        yerr = yerr + abs(absolute)
+    if error_floor_ns is not None:
+        systematic_error_ns = error_floor_ns
+    syst = float(systematic_error_ns)
+    if np.isfinite(syst) and syst != 0.0:
+        yerr = np.sqrt(yerr**2 + syst**2)
     return z, tcoll[ith], yerr, rootfilename, float(thresholds[ith])
 
 
@@ -2777,12 +3256,10 @@ def threshold_duration(time_ns, waveform, threshold_percent=5.0):
 
     right = y[peak_index:]
     right_cross = np.where(right <= level)[0]
-    if right_cross.size:
-        j1 = peak_index + int(right_cross[0])
-        j0 = max(peak_index, j1 - 1)
-    else:
-        j1 = waveform.size - 1
-        j0 = max(peak_index, j1 - 1)
+    if not right_cross.size:
+        return np.nan
+    j1 = peak_index + int(right_cross[0])
+    j0 = max(peak_index, j1 - 1)
 
     def interp_cross(i_low, i_high):
         y0, y1 = y[i_low], y[i_high]
@@ -2944,6 +3421,31 @@ def induced_waveforms_from_generation(generated, response, width, tau_e, tau_h, 
 
 def simulate_q_tcoll_model(x_vec, configuration):
     cfg = load_configuration(configuration)
+    requested_methods = _normalize_waveform_methods(cfg.get("fit_options", {}).get("waveform_methods"))
+    if requested_methods:
+        primary_method = _generation_method({
+            "fit_options": {
+                "generation_method": cfg.get("fit_options", {}).get(
+                    "generation_method",
+                    cfg.get("fit_options", {}).get("waveform_method", requested_methods[0]),
+                )
+            }
+        })
+        outputs = {}
+        for method in requested_methods:
+            method_cfg = copy.deepcopy(cfg)
+            method_cfg["fit_options"].pop("waveform_methods", None)
+            method_cfg["fit_options"]["generation_method"] = method
+            method_cfg["fit_options"]["waveform_method"] = "dt" if method == "direct" else method
+            outputs[method] = simulate_q_tcoll_model(x_vec, method_cfg)
+        if primary_method not in outputs:
+            primary_method = requested_methods[0]
+        primary = dict(outputs[primary_method])
+        primary["waveform_method_outputs"] = outputs
+        primary["waveform_methods"] = requested_methods
+        primary["waveform_method"] = primary_method
+        return primary
+
     values = parameter_values(cfg)
     ROOT = _compile_cpp_model()
     x = np.asarray(x_vec, dtype=float).ravel()
@@ -2951,8 +3453,18 @@ def simulate_q_tcoll_model(x_vec, configuration):
     rc_tau = rc_tau_ns_from_values(values)
     waveform_dt = float(cfg["fit_options"].get("waveform_dt_ns", 0.02))
     threshold_percent = float(cfg["fit_options"].get("tColl_threshold_percent", 5.0))
-    ignore_compute_wfs = bool(cfg["fit_options"].get("ignore_compute_WFs", False))
+    waveform_tail_rc_constants = float(cfg["fit_options"].get("waveform_tail_rc_constants", 20.0))
+    waveform_extra_time = float(cfg["fit_options"].get("waveform_extra_time_ns", 0.0))
+    generation_method = _generation_method(cfg)
+    ignore_compute_wfs = bool(cfg["fit_options"].get("ignore_compute_WFs", False)) or generation_method == "direct"
     if ignore_compute_wfs:
+        if generation_method == "direct" and bool(cfg["fit_options"].get("include_tcoll_in_cost", False)):
+            warnings.warn(
+                "generation_method='direct' does not compute physical pulse-duration profiles; "
+                "tColl output is filled with ones and include_tcoll_in_cost is disabled for simulation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         cfg["fit_options"]["ignore_pulse_duration_fit"] = True
         cfg["fit_options"]["include_tcoll_in_cost"] = False
     roofit_cfg = copy.deepcopy(cfg)
@@ -2967,6 +3479,7 @@ def simulate_q_tcoll_model(x_vec, configuration):
     n_z_grid = int(cfg["fit_options"].get("n_z_grid", DEFAULT_N_Z_GRID))
     voltage_enabled = bool(fit_cfg["parameters"]["EF_BiasVoltage"].get("enabled", False))
     field_kind = _field_model_kind(fit_cfg)
+    waveform_method_kind = 0 if generation_method == "direct" else _waveform_method_kind({"fit_options": {"waveform_method": generation_method}})
 
     profile = ROOT.trapping_roofit_v5.evaluate_profile(
         _std_vector(x),
@@ -2977,23 +3490,57 @@ def simulate_q_tcoll_model(x_vec, configuration):
         field_kind,
     )
     charge_total, charge_e, charge_h, charge_no_offset, offset, response = _profile_result_to_dict(profile)
+    charge_direct_total = charge_total.copy()
+    charge_direct_e = charge_e.copy()
+    charge_direct_h = charge_h.copy()
+    charge_direct_no_offset = charge_no_offset.copy()
     response["vdrift_e"] = response["vdrift_mue"]
     response["vdrift_h"] = response["vdrift_muh"]
     response["rc_tau_ns"] = rc_tau
+    injected = ROOT.trapping_roofit_v5.evaluate_injected_charge_profile(
+        _std_vector(x),
+        _std_vector(p),
+        steps,
+        n_z_grid,
+        voltage_enabled,
+        field_kind,
+    )
+    charge_injected = _to_numpy(injected.charge_injected)
+    charge_injected_no_offset = _to_numpy(injected.charge_injected_no_offset)
 
     if ignore_compute_wfs:
         tcoll_intrinsic = np.ones_like(x, dtype=float)
         tcoll_rc = np.ones_like(x, dtype=float)
+        charge_from_wf = np.full_like(x, np.nan, dtype=float)
+        charge_from_wf_rc = np.full_like(x, np.nan, dtype=float)
         stored_waveforms = {}
     else:
         tcoll_intrinsic = _to_numpy(ROOT.trapping_roofit_v5.evaluate_tcoll_profile(
             _std_vector(x), _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
-            waveform_dt, threshold_percent, 0.0, False,
+            waveform_dt, threshold_percent, 0.0, waveform_tail_rc_constants, waveform_extra_time,
+            False, waveform_method_kind,
         ))
         tcoll_rc = _to_numpy(ROOT.trapping_roofit_v5.evaluate_tcoll_profile(
             _std_vector(x), _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
-            waveform_dt, threshold_percent, rc_tau, False,
+            waveform_dt, threshold_percent, rc_tau, waveform_tail_rc_constants, waveform_extra_time,
+            False, waveform_method_kind,
         ))
+        wf_charge = ROOT.trapping_roofit_v5.evaluate_waveform_charge_profile(
+            _std_vector(x), _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
+            waveform_dt, threshold_percent, rc_tau, waveform_tail_rc_constants, waveform_extra_time,
+            waveform_method_kind,
+        )
+        charge_e_from_wf = _to_numpy(wf_charge.charge_e_before_rc)
+        charge_h_from_wf = _to_numpy(wf_charge.charge_h_before_rc)
+        charge_from_wf = _to_numpy(wf_charge.charge_before_rc)
+        charge_e_from_wf_rc = _to_numpy(wf_charge.charge_e_after_rc)
+        charge_h_from_wf_rc = _to_numpy(wf_charge.charge_h_after_rc)
+        charge_from_wf_rc = _to_numpy(wf_charge.charge_after_rc)
+        if charge_from_wf.shape == x.shape and np.all(np.isfinite(charge_from_wf)):
+            charge_e = charge_e_from_wf
+            charge_h = charge_h_from_wf
+            charge_no_offset = charge_e + charge_h
+            charge_total = charge_from_wf
         store_indices = cfg["fit_options"].get("waveform_store_indices", [])
         if isinstance(store_indices, str) and store_indices.lower() == "auto":
             selected_indices = waveform_store_indices_auto(
@@ -3013,12 +3560,17 @@ def simulate_q_tcoll_model(x_vec, configuration):
             int_vector.push_back(int(index))
         wf_result = ROOT.trapping_roofit_v5.evaluate_waveforms_for_indices(
             _std_vector(x), int_vector, _std_vector(p), steps, n_z_grid, voltage_enabled, field_kind,
-            waveform_dt, threshold_percent, rc_tau,
+            waveform_dt, threshold_percent, rc_tau, waveform_tail_rc_constants, waveform_extra_time,
+            waveform_method_kind,
         )
         time_axis = _to_numpy(wf_result.time_ns)
         n_time = int(wf_result.n_time)
         total_flat = _to_numpy(wf_result.total_flat)
+        electron_flat = _to_numpy(wf_result.electron_flat)
+        hole_flat = _to_numpy(wf_result.hole_flat)
         total_rc_flat = _to_numpy(wf_result.total_rc_flat)
+        electron_rc_flat = _to_numpy(wf_result.electron_rc_flat)
+        hole_rc_flat = _to_numpy(wf_result.hole_rc_flat)
         stored_waveforms = {}
         for j in range(wf_result.indices.size()):
             index = int(wf_result.indices[j])
@@ -3026,14 +3578,18 @@ def simulate_q_tcoll_model(x_vec, configuration):
             stop = start + n_time
             total = total_flat[start:stop]
             total_rc = total_rc_flat[start:stop]
+            electron = electron_flat[start:stop]
+            hole = hole_flat[start:stop]
+            electron_rc = electron_rc_flat[start:stop]
+            hole_rc = hole_rc_flat[start:stop]
             stored_waveforms[index] = {
                 "x": float(wf_result.x[j]),
                 "time_ns": time_axis,
-                "e": np.zeros_like(total),
-                "h": np.zeros_like(total),
+                "e": electron,
+                "h": hole,
                 "total": total,
-                "e_rc": np.zeros_like(total_rc),
-                "h_rc": np.zeros_like(total_rc),
+                "e_rc": electron_rc,
+                "h_rc": hole_rc,
                 "total_rc": total_rc,
                 "threshold_percent": threshold_percent,
             }
@@ -3044,7 +3600,22 @@ def simulate_q_tcoll_model(x_vec, configuration):
         "charge_e": charge_e,
         "charge_h": charge_h,
         "charge_no_offset": charge_no_offset,
+        "charge_direct_total": charge_direct_total,
+        "charge_direct_e": charge_direct_e,
+        "charge_direct_h": charge_direct_h,
+        "charge_direct_no_offset": charge_direct_no_offset,
         "charge_offset": offset,
+        "charge_injected": charge_injected,
+        "charge_injected_no_offset": charge_injected_no_offset,
+        "charge_from_wf": charge_from_wf,
+        "charge_from_wf_rc": charge_from_wf_rc,
+        "charge_e_from_wf": charge_e_from_wf if not ignore_compute_wfs else np.full_like(x, np.nan, dtype=float),
+        "charge_h_from_wf": charge_h_from_wf if not ignore_compute_wfs else np.full_like(x, np.nan, dtype=float),
+        "charge_e_from_wf_rc": charge_e_from_wf_rc if not ignore_compute_wfs else np.full_like(x, np.nan, dtype=float),
+        "charge_h_from_wf_rc": charge_h_from_wf_rc if not ignore_compute_wfs else np.full_like(x, np.nan, dtype=float),
+        "charge_profile_source": "waveform" if not ignore_compute_wfs else "direct_profile",
+        "generation_method": generation_method,
+        "waveform_method": generation_method,
         "tcoll_intrinsic": tcoll_intrinsic,
         "tcoll_rc": tcoll_rc,
         "tcoll_e_intrinsic": tcoll_intrinsic,
@@ -3169,6 +3740,41 @@ def _metric_text(value):
 def plot_q_tcoll_diagnostics(result, data=None):
     import matplotlib.pyplot as plt
 
+    def _finite_error_limits(y, yerr=None):
+        y = np.asarray(y, dtype=float)
+        if y.size == 0:
+            return None
+        yerr = np.zeros_like(y) if yerr is None else np.asarray(yerr, dtype=float)
+        if yerr.shape != y.shape:
+            yerr = np.zeros_like(y)
+        low = y - yerr
+        high = y + yerr
+        finite = np.isfinite(low) & np.isfinite(high)
+        if not np.any(finite):
+            return None
+        return float(np.nanmin(low[finite])), float(np.nanmax(high[finite]))
+
+    def _apply_combined_ylim(axis, *items):
+        ranges = []
+        for item in items:
+            if item is None:
+                continue
+            if isinstance(item, tuple):
+                limits = _finite_error_limits(item[0], item[1] if len(item) > 1 else None)
+            else:
+                limits = _finite_error_limits(item, None)
+            if limits is not None:
+                ranges.append(limits)
+        if not ranges:
+            return
+        low = min(item[0] for item in ranges)
+        high = max(item[1] for item in ranges)
+        span = high - low
+        if not np.isfinite(span) or span <= 0.0:
+            span = max(abs(high), abs(low), 1.0)
+        pad = 0.1 * span
+        axis.set_ylim(low - pad, high + pad)
+
     fig = plt.figure(figsize=(16, 10))
     grid = fig.add_gridspec(4, 4, height_ratios=[1.0, 1.0, 0.55, 1.0], hspace=0.55, wspace=0.38)
     ax_q = fig.add_subplot(grid[0:2, 0:2])
@@ -3181,76 +3787,161 @@ def plot_q_tcoll_diagnostics(result, data=None):
     ax_map = fig.add_subplot(grid[3, 3])
     metrics = compute_q_tcoll_metrics(result, data=data)
 
-    x = result["x"]
+    x = np.asarray(result["x"], dtype=float)
+    cfg = result.get("configuration", {})
+    params = result.get("parameters", {})
+    profile_offset = result.get("charge_offset")
+    if profile_offset is None:
+        try:
+            profile_offset = float(params.get("BM_scaleOffset", 0.0)) + float(params.get("SC_scaleOffset", 0.0))
+        except Exception:
+            profile_offset = 0.0
+    profile_offset = float(profile_offset)
+    x_curve = x
+    charge_total_curve = np.asarray(result["charge_total"], dtype=float) - profile_offset
+    charge_e_curve = np.asarray(result["charge_e"], dtype=float)
+    charge_h_curve = np.asarray(result["charge_h"], dtype=float)
+    if x.size >= 2 and cfg and params:
+        try:
+            dense_size = max(int(x.size) * 10, int(x.size))
+            x_curve = np.linspace(float(np.nanmin(x)), float(np.nanmax(x)), dense_size)
+            curve_cfg = load_configuration(cfg)
+            curve_cfg["fit_options"].pop("waveform_methods", None)
+            for name in curve_cfg["parameters"]:
+                if name in params:
+                    curve_cfg["parameters"][name]["value"] = float(params[name])
+            curve_model = simulate_q_tcoll_model(x_curve, curve_cfg)
+            curve_offset = float(curve_model.get("charge_offset", profile_offset))
+            charge_total_curve = np.asarray(curve_model["charge_total"], dtype=float) - curve_offset
+            charge_e_curve = np.asarray(curve_model["charge_e"], dtype=float)
+            charge_h_curve = np.asarray(curve_model["charge_h"], dtype=float)
+        except Exception:
+            x_curve = x
     data_x_q = data_y_q = data_y_q_err = None
     data_x_t = data_y_t = data_y_t_err = None
+    data_x_q_masked = data_y_q_masked = data_y_q_masked_err = None
+    data_x_t_masked = data_y_t_masked = data_y_t_masked_err = None
     if data is not None:
         if "x_q" in data and "y_q" in data:
             data_x_q = np.asarray(data["x_q"], dtype=float)
-            data_y_q = np.asarray(data["y_q"], dtype=float)
+            data_y_q = np.asarray(data["y_q"], dtype=float) - profile_offset
             data_y_q_err = data.get("y_q_err")
-            ax_q.errorbar(data_x_q, data_y_q, yerr=data_y_q_err, fmt="o", ms=3, color="black", label="data Q")
+            ax_q.errorbar(data_x_q, data_y_q, yerr=data_y_q_err, fmt="o", ms=3, color="black", label="data (used)")
+        if "x_q_masked" in data and "y_q_masked" in data:
+            data_x_q_masked = np.asarray(data["x_q_masked"], dtype=float)
+            data_y_q_masked = np.asarray(data["y_q_masked"], dtype=float) - profile_offset
+            data_y_q_masked_err = data.get("y_q_masked_err")
+            ax_q.errorbar(
+                data_x_q_masked, data_y_q_masked, yerr=data_y_q_masked_err,
+                fmt="o", ms=3, color="red", ecolor="red", alpha=0.75, label="masked",
+            )
         if "x_t" in data and "y_t" in data:
             data_x_t = np.asarray(data["x_t"], dtype=float)
             data_y_t = np.asarray(data["y_t"], dtype=float)
             data_y_t_err = data.get("y_t_err")
-            ax_t.errorbar(data_x_t, data_y_t, yerr=data_y_t_err, fmt="o", ms=3, color="black", label="data tColl")
-    ax_q.plot(x, result["charge_total"], color="tab:orange", label="Q total")
-    ax_q.plot(x, result["charge_e"], color="darkblue", alpha=0.8, label="e")
-    ax_q.plot(x, result["charge_h"], color="crimson", alpha=0.8, label="h")
-    ax_q.set(ylabel="charge / NE", title="charge profile")
+            t_data_state = "used" if metrics.get("include_tcoll_in_cost", True) else "not fit"
+            ax_t.errorbar(data_x_t, data_y_t, yerr=data_y_t_err, fmt="o", ms=3, color="black", label=f"data ({t_data_state})")
+        if "x_t_masked" in data and "y_t_masked" in data:
+            data_x_t_masked = np.asarray(data["x_t_masked"], dtype=float)
+            data_y_t_masked = np.asarray(data["y_t_masked"], dtype=float)
+            data_y_t_masked_err = data.get("y_t_masked_err")
+            ax_t.errorbar(
+                data_x_t_masked, data_y_t_masked, yerr=data_y_t_masked_err,
+                fmt="o", ms=3, color="red", ecolor="red", alpha=0.75, label="masked",
+            )
+    charge_metrics = metrics.get("charge") or {}
+    q_is_used = True
+    q_label = f"{'fit' if q_is_used else 'Q(free)'}: $\\chi^2/N$={_metric_text((charge_metrics.get('chi2', np.nan) / max(charge_metrics.get('n', 0), 1)) if charge_metrics else np.nan)}"
+    ax_q.plot(x_curve, charge_total_curve, color="tab:orange", label=q_label)
+    if charge_e_curve.shape == x_curve.shape:
+        ax_q.plot(x_curve, charge_e_curve, color="darkblue", alpha=0.8, label="e")
+    if charge_h_curve.shape == x_curve.shape:
+        ax_q.plot(x_curve, charge_h_curve, color="crimson", alpha=0.8, label="h")
+    ax_q.set(ylabel="charge [NE]", title="charge profile")
     ax_q.legend(frameon=False)
 
     if data_x_q is not None and data_y_q is not None:
-        q_model_at_data = np.interp(data_x_q, x, result["charge_total"], left=np.nan, right=np.nan)
+        q_model_at_data = np.interp(data_x_q, x, np.asarray(result["charge_total"], dtype=float) - profile_offset, left=np.nan, right=np.nan)
         ax_q_res.errorbar(data_x_q, data_y_q - q_model_at_data, yerr=data_y_q_err, fmt="o", ms=3, color="black")
+        _apply_combined_ylim(ax_q_res, (data_y_q - q_model_at_data, data_y_q_err), [0.0])
+    if data_x_q_masked is not None and data_y_q_masked is not None:
+        q_model_at_masked = np.interp(
+            data_x_q_masked, x, np.asarray(result["charge_total"], dtype=float) - profile_offset,
+            left=np.nan, right=np.nan,
+        )
+        ax_q_res.errorbar(
+            data_x_q_masked, data_y_q_masked - q_model_at_masked,
+            yerr=data_y_q_masked_err, fmt="o", ms=3, color="red", ecolor="red", alpha=0.75,
+        )
     ax_q_res.axhline(0.0, color="black", lw=1)
-    ax_q_res.set(xlabel="z focus / um", ylabel="data-model", title="charge residual")
+    ax_q_res.set(xlabel="z (SiC) [µm]", ylabel="data - fit [NE]", title="charge residual")
+    _apply_combined_ylim(
+        ax_q,
+        (data_y_q, data_y_q_err) if data_y_q is not None else None,
+        charge_total_curve,
+        charge_e_curve if charge_e_curve.shape == x_curve.shape else None,
+        charge_h_curve if charge_h_curve.shape == x_curve.shape else None,
+    )
 
-    rc_label = f"total, RC tau={result['response']['rc_tau_ns']:.3g} ns"
-    ax_t.plot(x, result["tcoll_rc"], color="black", lw=2.0, label=rc_label)
-    ax_t.set(ylabel="duration / ns", title="pulse-duration profile")
+    tcoll_metrics = metrics.get("tcoll") or {}
+    threshold = cfg.get("fit_options", {}).get("tColl_threshold_percent", result.get("threshold_percent", np.nan))
+    t_is_used = bool(metrics.get("include_tcoll_in_cost", True))
+    rc_label = (
+        f"{'fit' if t_is_used else 'tColl(free)'}: $\\chi^2/N$="
+        f"{_metric_text((tcoll_metrics.get('chi2', np.nan) / max(tcoll_metrics.get('n', 0), 1)) if tcoll_metrics else np.nan)}, "
+        f"RC $\\tau$={result['response']['rc_tau_ns']:.3g} ns"
+    )
+    ax_t.plot(x, result["tcoll_rc"], color="purple", lw=2.0, label=rc_label)
+    ax_t.set(ylabel="duration [ns]", title=f"pulse-duration profile (th={_metric_text(threshold)}%)")
     ax_t.legend(frameon=False)
 
     if data_x_t is not None and data_y_t is not None:
         t_model_at_data = np.interp(data_x_t, x, result["tcoll_rc"], left=np.nan, right=np.nan)
         ax_t_res.errorbar(data_x_t, data_y_t - t_model_at_data, yerr=data_y_t_err, fmt="o", ms=3, color="black")
+        _apply_combined_ylim(ax_t_res, (data_y_t - t_model_at_data, data_y_t_err), [0.0])
+    if data_x_t_masked is not None and data_y_t_masked is not None:
+        t_model_at_masked = np.interp(data_x_t_masked, x, result["tcoll_rc"], left=np.nan, right=np.nan)
+        ax_t_res.errorbar(
+            data_x_t_masked, data_y_t_masked - t_model_at_masked,
+            yerr=data_y_t_masked_err, fmt="o", ms=3, color="red", ecolor="red", alpha=0.75,
+        )
     ax_t_res.axhline(0.0, color="black", lw=1)
-    ax_t_res.set(xlabel="z focus / um", ylabel="data-model / ns", title="duration residual")
+    ax_t_res.set(xlabel="z (SiC) [µm]", ylabel="data - fit [ns]", title="duration residual")
+    _apply_combined_ylim(
+        ax_t,
+        (data_y_t, data_y_t_err) if data_y_t is not None else None,
+        result["tcoll_rc"],
+    )
 
     response = result["response"]
     z = response["z"]
     ax_field.plot(z, response["efield"], color="tab:green")
-    ax_field.set(xlabel="z / um", ylabel="field / (V/um)", title="electric field")
+    ax_field.set(xlabel="z (SiC) [µm]", ylabel="field [V/µm]", title="electric field")
     ax_v.plot(z, response["vdrift_e"], color="darkblue", label="e")
     ax_v.plot(z, response["vdrift_h"], color="crimson", label="h")
     ax_v.set_yscale("log")
-    ax_v.set(xlabel="z / um", ylabel="velocity / (um/ns)", title="drift velocity")
+    ax_v.set(xlabel="z (SiC) [µm]", ylabel="velocity [µm/ns]", title="drift velocity")
     ax_v.legend(frameon=False)
-    ax_resp.plot(z, response["response_total"], color="black", label="sum")
+    ax_resp.plot(z, response["response_total"], color="black", label="total")
     ax_resp.plot(z, response["response_e"], color="darkblue", label="e")
     ax_resp.plot(z, response["response_h"], color="crimson", label="h")
-    ax_resp.set(xlabel="z / um", ylabel="response", title="material response")
+    ax_resp.set(xlabel="z (SiC) [µm]", ylabel="CCE", title="CCE")
     ax_resp.legend(frameon=False)
     ax_map.plot(z, response["pulse_duration_intrinsic"], color="black", label="total")
     ax_map.plot(z, response["pulse_duration_e_intrinsic"], color="darkblue", alpha=0.85, label="e")
     ax_map.plot(z, response["pulse_duration_h_intrinsic"], color="crimson", alpha=0.85, label="h")
-    ax_map.set(xlabel="z / um", ylabel="duration / ns", title="intrinsic local duration")
+    ax_map.set(xlabel="z (SiC) [µm]", ylabel="duration [ns]", title="collection time")
     ax_map.legend(frameon=False)
     for ax in fig.axes:
         ax.grid(alpha=0.25)
-    charge_metrics = metrics.get("charge") or {}
-    tcoll_metrics = metrics.get("tcoll") or {}
     combined_metrics = metrics.get("combined") or {}
     include_t = bool(metrics.get("include_tcoll_in_cost", True))
-    t_label = "included" if include_t else "ignored"
+    t_label = "tColl included" if include_t else "tColl ignored"
     fig.suptitle(
-        "Combined cost: "
-        f"NLL={_metric_text(combined_metrics.get('nll'))}, "
-        f"chi2/N={_metric_text(combined_metrics.get('chi2_dof'))} "
-        f"(tColl {t_label}); "
-        f"Q chi2={_metric_text(charge_metrics.get('chi2'))}; "
-        f"tColl chi2={_metric_text(tcoll_metrics.get('chi2'))}",
+        f"RooFit ID: {result.get('generation_id', '--')} | "
+        f"$\\mathcal{{NLL}}$={_metric_text(combined_metrics.get('nll'))}, "
+        f"$\\chi^2/N$={_metric_text(combined_metrics.get('chi2_dof'))} "
+        f"({t_label})",
         fontsize=12,
     )
     return fig
@@ -3367,6 +4058,138 @@ def plot_model_waveforms(result, indices=None):
     return fig
 
 
+def _q_tcoll_model_from_fit_output(output):
+    x = np.asarray(output["x"], dtype=float)
+    response = output.get("material_response", {})
+    if "vdrift_e" not in response and "vdrift_mue" in response:
+        response = dict(response)
+        response["vdrift_e"] = response["vdrift_mue"]
+        response["vdrift_h"] = response.get("vdrift_muh", response.get("vdrift_h", []))
+    if "rc_tau_ns" not in response:
+        response = dict(response)
+        try:
+            response["rc_tau_ns"] = rc_tau_ns_from_values(output.get("parameters", {}))
+        except Exception:
+            response["rc_tau_ns"] = np.nan
+    tcoll = np.asarray(output.get("y_tcoll_fit", np.ones_like(x)), dtype=float)
+    if tcoll.size != x.size:
+        tcoll = np.interp(x, np.asarray(output.get("x_tcoll", x), dtype=float), tcoll, left=np.nan, right=np.nan) if tcoll.size else np.ones_like(x)
+    return {
+        "generation_id": output.get("generation_id", "--"),
+        "x": x,
+        "charge_total": np.asarray(output["y_fit"], dtype=float),
+        "charge_e": np.asarray(output["y_fit_e"], dtype=float),
+        "charge_h": np.asarray(output["y_fit_h"], dtype=float),
+        "charge_no_offset": np.asarray(output["y_fit_no_offset"], dtype=float),
+        "charge_offset": float(output.get("profile_offset", output.get("y_fit_offset", 0.0))),
+        "tcoll_rc": tcoll,
+        "tcoll_intrinsic": np.asarray(output.get("y_tcoll_intrinsic", tcoll), dtype=float) if np.asarray(output.get("y_tcoll_intrinsic", tcoll), dtype=float).size == x.size else tcoll,
+        "threshold_percent": output.get("q_tcoll_fit_options", {}).get("tColl_threshold_percent", np.nan),
+        "response": response,
+        "configuration": output.get("configuration", {}),
+        "parameters": output.get("parameters", {}),
+    }
+
+
+def _q_tcoll_data_from_fit_output(output):
+    data = {
+        "x_q": np.asarray(output["x"], dtype=float),
+        "y_q": np.asarray(output["y_data"], dtype=float),
+        "y_q_err": np.asarray(output["y_sigma"], dtype=float),
+    }
+    x_t = np.asarray(output.get("x_tcoll", []), dtype=float)
+    y_t = np.asarray(output.get("y_tcoll_data", []), dtype=float)
+    sigma_t = np.asarray(output.get("y_tcoll_sigma", []), dtype=float)
+    if x_t.size and y_t.size == x_t.size and sigma_t.size == x_t.size:
+        data.update({"x_t": x_t, "y_t": y_t, "y_t_err": sigma_t})
+    masked = output.get("masked_data", {})
+    masked_q = masked.get("charge") if isinstance(masked, dict) else None
+    if isinstance(masked_q, dict) and len(masked_q.get("x", [])):
+        data.update({
+            "x_q_masked": np.asarray(masked_q.get("x", []), dtype=float),
+            "y_q_masked": np.asarray(masked_q.get("y", []), dtype=float),
+            "y_q_masked_err": np.asarray(masked_q.get("sigma", []), dtype=float),
+        })
+    masked_t = masked.get("tColl") if isinstance(masked, dict) else None
+    if isinstance(masked_t, dict) and len(masked_t.get("x", [])):
+        data.update({
+            "x_t_masked": np.asarray(masked_t.get("x", []), dtype=float),
+            "y_t_masked": np.asarray(masked_t.get("y", []), dtype=float),
+            "y_t_masked_err": np.asarray(masked_t.get("sigma", []), dtype=float),
+        })
+    return data
+
+
+def _save_q_tcoll_diagnostic_plot(output, output_dir):
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    png_path = directory / f"{output['generation_id']}_q_tcoll_diagnostic.png"
+    figure = plot_q_tcoll_diagnostics(
+        _q_tcoll_model_from_fit_output(output),
+        data=_q_tcoll_data_from_fit_output(output),
+    )
+    figure.savefig(png_path, dpi=180)
+    try:
+        import matplotlib.pyplot as plt
+        plt.close(figure)
+    except Exception:
+        pass
+    output["q_tcoll_diagnostic_plot_path"] = png_path
+    return png_path
+
+
+def plot_covariance_or_correlation(output, use_correlation=False):
+    import matplotlib.pyplot as plt
+
+    matrix = np.asarray(output["correlation" if use_correlation else "covariance"], dtype=float)
+    labels = [parameter_label(name) for name in output["fit_names"]]
+    figure, axis = plt.subplots(figsize=(max(6, 0.7 * len(labels)), max(5, 0.65 * len(labels))))
+    if use_correlation:
+        image = axis.imshow(matrix, vmin=-1.0, vmax=1.0, cmap="coolwarm")
+        colorbar_label = "correlation"
+        title = "RooFit correlation matrix"
+    else:
+        image = axis.imshow(matrix, cmap="viridis")
+        colorbar_label = "covariance"
+        title = "RooFit covariance matrix"
+    axis.set_xticks(range(len(labels)), labels, rotation=60, ha="right")
+    axis.set_yticks(range(len(labels)), labels)
+    axis.set_title(title)
+    figure.colorbar(image, ax=axis, label=colorbar_label)
+    figure.tight_layout()
+    return figure
+
+
+def _apply_postfit_tcoll_visualization(output, method=None):
+    if output.get("q_tcoll_fit_options", {}).get("include_tcoll_in_cost", False):
+        return output
+    cfg = load_configuration(output.get("configuration", {}))
+    options = cfg.setdefault("fit_options", {})
+    generation_method = _generation_method(cfg)
+    method = method or options.get("postfit_tcoll_generation_method")
+    if method is None:
+        method = None if generation_method == "direct" else generation_method
+    if method is None:
+        return output
+    method = _generation_method({"fit_options": {"generation_method": method}})
+    if method == "direct":
+        return output
+    for name, value in output.get("parameters", {}).items():
+        if name in cfg.get("parameters", {}):
+            cfg["parameters"][name]["value"] = float(value)
+    options["generation_method"] = method
+    options["waveform_method"] = method
+    options["ignore_compute_WFs"] = False
+    options["ignore_pulse_duration_fit"] = True
+    options["include_tcoll_in_cost"] = False
+    options["waveform_store_indices"] = []
+    model = simulate_q_tcoll_model(np.asarray(output["x"], dtype=float), cfg)
+    output["y_tcoll_fit"] = np.asarray(model["tcoll_rc"], dtype=float)
+    output["y_tcoll_intrinsic"] = np.asarray(model["tcoll_intrinsic"], dtype=float)
+    output.setdefault("q_tcoll_fit_options", {})["postfit_tcoll_generation_method"] = method
+    return output
+
+
 def fit_trapping_q_tcoll_model(
     x_charge,
     y_charge,
@@ -3376,6 +4199,8 @@ def fit_trapping_q_tcoll_model(
     x_tcoll=None,
     y_tcoll=None,
     y_tcoll_sigma=None,
+    masked_charge_data=None,
+    masked_tcoll_data=None,
     show_summary=True,
     show_fit=True,
     show_covariance=False,
@@ -3393,9 +4218,17 @@ def fit_trapping_q_tcoll_model(
     """Fit charge and, optionally, pulse duration with the local RooFit/C++ NLL."""
     cfg = load_configuration(configuration)
     options = cfg.setdefault("fit_options", {})
+    generation_method = _generation_method(cfg)
     ignore_pulse = bool(options.get("ignore_pulse_duration_fit", False))
-    ignore_wfs = bool(options.get("ignore_compute_WFs", False))
+    ignore_wfs = bool(options.get("ignore_compute_WFs", False)) or generation_method == "direct"
     include_tcoll = bool(options.get("include_tcoll_in_cost", True)) and not ignore_pulse
+
+    if generation_method == "direct" and include_tcoll:
+        raise ValueError(
+            "generation_method='direct' only computes the old direct charge profile and fills "
+            "pulse-duration arrays with ones. Set ignore_pulse_duration_fit=True and "
+            "include_tcoll_in_cost=False, or use generation_method='dt'/'dz' for a tColl fit."
+        )
 
     if ignore_wfs:
         options["include_tcoll_in_cost"] = False
@@ -3408,17 +4241,17 @@ def fit_trapping_q_tcoll_model(
         if name in MODEL_PARAMETER_NAMES
     }
 
-    if not include_tcoll:
+    if ignore_wfs:
         output = fit_trapping_model(
             x_charge,
             y_charge,
             roofit_cfg,
             y_sigma=y_charge_sigma,
-            show_summary=show_summary,
-            show_fit=show_fit,
+            show_summary=False,
+            show_fit=False,
             show_covariance=show_covariance,
-            show_correlation=show_correlation,
-            save_results=save_results,
+            show_correlation=False,
+            save_results=False,
             fit_name=fit_name,
             output_dir=output_dir,
             do_useMINOS=do_useMINOS,
@@ -3435,11 +4268,48 @@ def fit_trapping_q_tcoll_model(
             "x_tcoll_provided": x_tcoll is not None,
             "y_tcoll_provided": y_tcoll is not None,
             "y_tcoll_sigma_provided": y_tcoll_sigma is not None,
+            "generation_method": generation_method,
             "fit_engine": "local RooFit/Minuit2 charge-profile C++ wrapper",
+            "tColl_threshold_percent": options.get("tColl_threshold_percent"),
+            "waveform_tail_rc_constants": options.get("waveform_tail_rc_constants", 20.0),
+            "waveform_extra_time_ns": options.get("waveform_extra_time_ns", 0.0),
         }
+        output["configuration"] = cfg
+        q_values = parameter_values(cfg)
+        output["parameters"].update({
+            name: q_values[name]
+            for name in Q_TCOLL_EXTRA_PARAMETER_NAMES
+            if name in q_values
+        })
+        output["x_tcoll"] = np.asarray([] if x_tcoll is None else x_tcoll, dtype=float)
+        output["y_tcoll_data"] = np.asarray([] if y_tcoll is None else y_tcoll, dtype=float)
+        output["y_tcoll_sigma"] = np.asarray([] if y_tcoll_sigma is None else y_tcoll_sigma, dtype=float)
+        output["y_tcoll_fit"] = np.asarray([], dtype=float)
+        output["y_tcoll_intrinsic"] = np.ones_like(np.asarray(output["x"], dtype=float))
+        output["masked_data"] = {
+            "charge": _data_tuple_to_dict(masked_charge_data),
+            "tColl": _data_tuple_to_dict(masked_tcoll_data),
+        }
+        _apply_postfit_tcoll_visualization(output)
+        if show_summary:
+            _print_fit_summary(output)
+        if save_results:
+            _save_q_tcoll_diagnostic_plot(output, output_dir)
+            _save_fit_result(output, output_dir)
+        if show_fit:
+            import matplotlib.pyplot as plt
+            plot_q_tcoll_diagnostics(
+                _q_tcoll_model_from_fit_output(output),
+                data=_q_tcoll_data_from_fit_output(output),
+            )
+            plt.show()
+        if show_covariance or show_correlation:
+            import matplotlib.pyplot as plt
+            plot_covariance_or_correlation(output, use_correlation=show_correlation)
+            plt.show()
         return output
 
-    if x_tcoll is None or y_tcoll is None or y_tcoll_sigma is None:
+    if include_tcoll and (x_tcoll is None or y_tcoll is None or y_tcoll_sigma is None):
         raise ValueError(
             "x_tcoll, y_tcoll and y_tcoll_sigma are required when "
             "fit_options['include_tcoll_in_cost']=True and "
@@ -3451,8 +4321,8 @@ def fit_trapping_q_tcoll_model(
     config = load_fit_configuration(roofit_cfg)
     specs = config["parameters"]
     options = config["fit_options"]
-    options["include_tcoll_in_cost"] = True
-    options["ignore_pulse_duration_fit"] = False
+    options["include_tcoll_in_cost"] = bool(include_tcoll)
+    options["ignore_pulse_duration_fit"] = not bool(include_tcoll)
     options["ignore_compute_WFs"] = False
     if do_useMINOS is not None:
         options["do_useMINOS"] = bool(do_useMINOS)
@@ -3471,13 +4341,18 @@ def fit_trapping_q_tcoll_model(
         raise ValueError("x_charge and y_charge must be one-dimensional arrays with equal shape")
     sigma_q = _make_point_sigmas(yq, y_charge_sigma, options)
 
-    xt = np.asarray(x_tcoll, dtype=float)
-    yt = np.asarray(y_tcoll, dtype=float)
-    sigma_t = np.asarray(y_tcoll_sigma, dtype=float)
-    if xt.ndim != 1 or yt.shape != xt.shape or sigma_t.shape != xt.shape:
-        raise ValueError("x_tcoll, y_tcoll and y_tcoll_sigma must be one-dimensional arrays with equal shape")
-    if np.any(~np.isfinite(sigma_t)) or np.any(sigma_t <= 0.0):
-        raise ValueError("y_tcoll_sigma must contain finite positive values")
+    if include_tcoll:
+        xt = np.asarray(x_tcoll, dtype=float)
+        yt = np.asarray(y_tcoll, dtype=float)
+        sigma_t = np.asarray(y_tcoll_sigma, dtype=float)
+        if xt.ndim != 1 or yt.shape != xt.shape or sigma_t.shape != xt.shape:
+            raise ValueError("x_tcoll, y_tcoll and y_tcoll_sigma must be one-dimensional arrays with equal shape")
+        if np.any(~np.isfinite(sigma_t)) or np.any(sigma_t <= 0.0):
+            raise ValueError("y_tcoll_sigma must contain finite positive values")
+    else:
+        xt = np.asarray([], dtype=float)
+        yt = np.asarray([], dtype=float)
+        sigma_t = np.asarray([], dtype=float)
 
     variables, parameter_list, fit_names, bounds, constraint_indices, constraint_means, constraint_sigmas = _make_roofit_parameters(ROOT, config)
     if not fit_names:
@@ -3487,6 +4362,10 @@ def fit_trapping_q_tcoll_model(
     rc_tau = rc_tau_ns_from_values(q_values)
     waveform_dt = float(options.get("waveform_dt_ns", 0.02))
     threshold_percent = float(options.get("tColl_threshold_percent", 5.0))
+    waveform_tail_rc_constants = float(options.get("waveform_tail_rc_constants", 20.0))
+    waveform_extra_time = float(options.get("waveform_extra_time_ns", 0.0))
+    generation_method = _generation_method(config)
+    waveform_method_kind = _waveform_method_kind({"fit_options": {"waveform_method": generation_method}})
 
     nll = ROOT.TrappingQTCollGaussianNLLV1(
         "trapping_q_tcoll_gaussian_nll",
@@ -3505,11 +4384,14 @@ def fit_trapping_q_tcoll_model(
         int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
         bool(specs["EF_BiasVoltage"].get("enabled", False)),
         _field_model_kind(config),
-        True,
+        bool(include_tcoll),
         False,
         waveform_dt,
         threshold_percent,
         rc_tau,
+        waveform_tail_rc_constants,
+        waveform_extra_time,
+        waveform_method_kind,
     )
 
     minimizer = ROOT.RooMinimizer(nll)
@@ -3574,18 +4456,19 @@ def fit_trapping_q_tcoll_model(
     fit_result = minimizer.save()
     parameters = _current_parameter_values(variables, config)
     parameters.update({name: q_values[name] for name in ("RC_capacitance_pF", "RC_resistance_ohm", "RC_extra_sigma_ns") if name in q_values})
+    p_final = [parameters[name] for name in MODEL_PARAMETER_NAMES]
     profile = ROOT.trapping_roofit_v5.evaluate_profile(
         _std_vector(xq),
-        _std_vector([parameters[name] for name in MODEL_PARAMETER_NAMES]),
+        _std_vector(p_final),
         int(options.get("steps_per_active_region", 400)),
         int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
         bool(specs["EF_BiasVoltage"].get("enabled", False)),
         _field_model_kind(config),
     )
-    y_fit, y_fit_e, y_fit_h, y_fit_no_offset, y_fit_offset, response = _profile_result_to_dict(profile)
-    t_fit = _to_numpy(ROOT.trapping_roofit_v5.evaluate_tcoll_profile(
-        _std_vector(xt),
-        _std_vector([parameters[name] for name in MODEL_PARAMETER_NAMES]),
+    y_fit_direct, y_fit_e_direct, y_fit_h_direct, y_fit_no_offset_direct, y_fit_offset, response = _profile_result_to_dict(profile)
+    wf_charge = ROOT.trapping_roofit_v5.evaluate_waveform_charge_profile(
+        _std_vector(xq),
+        _std_vector(p_final),
         int(options.get("steps_per_active_region", 400)),
         int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
         bool(specs["EF_BiasVoltage"].get("enabled", False)),
@@ -3593,10 +4476,34 @@ def fit_trapping_q_tcoll_model(
         waveform_dt,
         threshold_percent,
         rc_tau,
-        False,
-    ))
+        waveform_tail_rc_constants,
+        waveform_extra_time,
+        waveform_method_kind,
+    )
+    y_fit = _to_numpy(wf_charge.charge_before_rc)
+    y_fit_e = _to_numpy(wf_charge.charge_e_before_rc)
+    y_fit_h = _to_numpy(wf_charge.charge_h_before_rc)
+    y_fit_no_offset = y_fit_e + y_fit_h
+    if include_tcoll:
+        t_fit = _to_numpy(ROOT.trapping_roofit_v5.evaluate_tcoll_profile(
+            _std_vector(xt),
+            _std_vector(p_final),
+            int(options.get("steps_per_active_region", 400)),
+            int(options.get("n_z_grid", DEFAULT_N_Z_GRID)),
+            bool(specs["EF_BiasVoltage"].get("enabled", False)),
+            _field_model_kind(config),
+            waveform_dt,
+            threshold_percent,
+            rc_tau,
+            waveform_tail_rc_constants,
+            waveform_extra_time,
+            False,
+            waveform_method_kind,
+        ))
+    else:
+        t_fit = np.asarray([], dtype=float)
     chi2_q = float(np.sum(((y_fit - yq) / sigma_q) ** 2))
-    chi2_t = float(np.sum(((t_fit - yt) / sigma_t) ** 2))
+    chi2_t = float(np.sum(((t_fit - yt) / sigma_t) ** 2)) if include_tcoll else 0.0
     chi2 = chi2_q + chi2_t
     dof = max(yq.size + yt.size - len(fit_names), 1)
     covariance, correlation = _covariance_and_correlation(ROOT, fit_result, fit_names)
@@ -3611,6 +4518,7 @@ def fit_trapping_q_tcoll_model(
         "minos_names": minos_names,
         "minos_status_by_parameter": minos_status_by_parameter,
         "minos_raw_status_by_parameter": minos_raw_status_by_parameter,
+        "minos_new_minimum_candidates": {},
         "nll": float(nll.getVal()),
         "generation_id": generation_id,
         "fit_name": safe_name,
@@ -3638,12 +4546,20 @@ def fit_trapping_q_tcoll_model(
         "y_fit_e": y_fit_e,
         "y_fit_h": y_fit_h,
         "y_fit_no_offset": y_fit_no_offset,
+        "y_fit_direct": y_fit_direct,
+        "y_fit_e_direct": y_fit_e_direct,
+        "y_fit_h_direct": y_fit_h_direct,
+        "y_fit_no_offset_direct": y_fit_no_offset_direct,
         "y_fit_offset": y_fit_offset,
         "profile_offset": float(y_fit_offset),
         "x_tcoll": xt,
         "y_tcoll_data": yt,
         "y_tcoll_sigma": sigma_t,
         "y_tcoll_fit": t_fit,
+        "masked_data": {
+            "charge": _data_tuple_to_dict(masked_charge_data),
+            "tColl": _data_tuple_to_dict(masked_tcoll_data),
+        },
         "material_response": response,
         "roofit_variables": variables,
         "roofit_nll": nll,
@@ -3659,26 +4575,34 @@ def fit_trapping_q_tcoll_model(
     output["q_tcoll_fit_options"] = {
         "ignore_pulse_duration_fit": ignore_pulse,
         "ignore_compute_WFs": ignore_wfs,
-        "include_tcoll_in_cost": True,
-        "x_tcoll_provided": True,
-        "y_tcoll_provided": True,
-        "y_tcoll_sigma_provided": True,
-        "fit_engine": "local RooFit/Minuit2 Q+tColl C++ wrapper",
+        "include_tcoll_in_cost": bool(include_tcoll),
+        "x_tcoll_provided": x_tcoll is not None,
+        "y_tcoll_provided": y_tcoll is not None,
+        "y_tcoll_sigma_provided": y_tcoll_sigma is not None,
+        "generation_method": generation_method,
+        "fit_engine": "local RooFit/Minuit2 Q(+tColl) waveform C++ wrapper",
         "waveform_dt_ns": waveform_dt,
+        "waveform_method": generation_method,
+        "waveform_tail_rc_constants": waveform_tail_rc_constants,
+        "waveform_extra_time_ns": waveform_extra_time,
         "tColl_threshold_percent": threshold_percent,
         "rc_tau_ns": rc_tau,
     }
     output["timings"]["total_elapsed_s"] = perf_counter() - total_start
+    _apply_postfit_tcoll_visualization(output)
     if show_summary:
         _print_fit_summary(output)
         print(f"Q chi2/dof contribution = {chi2_q:.6g} / {max(yq.size - len(fit_names), 1)}")
         print(f"tColl chi2 contribution = {chi2_t:.6g} / {yt.size}")
     if save_results:
-        _save_fit_diagnostic_plot(output, output_dir)
+        _save_q_tcoll_diagnostic_plot(output, output_dir)
         _save_fit_result(output, output_dir)
     if show_fit:
         import matplotlib.pyplot as plt
-        plot_fit_diagnostics(output)
+        plot_q_tcoll_diagnostics(
+            _q_tcoll_model_from_fit_output(output),
+            data=_q_tcoll_data_from_fit_output(output),
+        )
         plt.show()
     if show_covariance or show_correlation:
         import matplotlib.pyplot as plt
